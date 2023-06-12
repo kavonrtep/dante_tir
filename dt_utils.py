@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import random
+import subprocess
 import tempfile
 
 
@@ -234,3 +236,57 @@ def save_fasta_dict_to_file(fasta_dict, fasta_file):
     with open(fasta_file, 'w') as f:
         for k, v in fasta_dict.items():
             f.write(">{}\n{}\n".format(k, v.upper()))
+
+
+def reverse_complement(dna):
+    """
+    reverse complement of dna sequence, including ambiguous bases
+    :param dna:
+    :return: reverse complement of dna sequence
+    """
+    # complement including all IUPAC codes
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'R': 'Y', 'Y': 'R', 'S': 'S',
+        'W': 'W', 'K': 'M', 'M': 'K', 'B': 'V', 'D': 'H', 'H': 'D', 'V': 'B', 'N': 'N'}
+
+    return ''.join(complement[base] for base in reversed(dna.upper()))
+
+
+def fragment_fasta_dict(fasta_dict, step=70, length=100, jitter=10):
+    """
+    fragment fasta sequences to overlapping parts
+    :param fasta_dict: dictionary with fasta sequences
+    :param step: step size
+    :param length: length of fragment
+    :param jitter: random jitter size - make step size random withing jitter limits
+    :return: dictionary with fragments
+    """
+    fragments_dict = {}
+    for seq_id, seq in fasta_dict.items():
+        for i in range(0, len(seq), step):
+            if i > 0:
+                ii = i + random.randint(-jitter, jitter)
+            else:
+                ii = i
+            id = F'{seq_id}_{ii}_{ii + length}'
+            fragments_dict[id] = seq[ii:ii + length]
+    return fragments_dict
+
+
+def cap3assembly(fasta_file):
+    """
+    run cap3 assembly
+    :param fasta_file: path to fasta file
+    :return: path to cap3 output file
+    assume that cap3 is in PATH
+    """
+    cmd = F'cap3 {fasta_file} -o 20 -p 70 -x cap'
+    stdout_file = F'{fasta_file}.cap.aln'
+    stderr_file = F'{fasta_file}.cap.err'
+    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    with open(stdout_file, 'w') as f:
+        f.write(stdout.decode())
+    with open(stderr_file, 'w') as f:
+        f.write(stderr.decode())
+    return stdout_file
+
