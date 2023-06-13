@@ -113,7 +113,7 @@ def main():
     for res in assembly:
         print(res)
 
-    dt.parse_cap3_aln(assembly[0])
+    dt.parse_cap3_aln(assembly[4])
 
 if __name__ == '__main__':
     main()

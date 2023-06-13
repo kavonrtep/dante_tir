@@ -338,9 +338,8 @@ def parse_cap3_aln(filename):
                     parts = line.strip().split()
                     read_name = parts[0][:-1]
                     orientation = parts[0][-1]
-                    seq = parts[1]
-                    seq = seq.replace(' ', '-')
-                    alignments[contig][read_name][segment_number] = seq
+                    seq = line[29:].replace(' ',"-").strip()
+                    alignments[contig_name][read_name][segment_number] = seq
                 elif line.startswith('consensus'):
                     segment_number += 1
                     positions += 60
