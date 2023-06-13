@@ -59,14 +59,15 @@ def main():
     downstream_seq = {}
     id = 0
     gff_dict = {}
-    offset=6000
+    offset = 6000
+    offset2 = 300
     for classification in tir_domains:
         upstream_seq[classification] = {}
         downstream_seq[classification] = {}
         for gff in tir_domains[classification]:
             if gff.strand == '+':
-                upstream = genome[gff.seqid][gff.start - offset:gff.start]
-                downstream = genome[gff.seqid][gff.end:gff.end + offset]
+                upstream = genome[gff.seqid][gff.start - offset:gff.start + offset2]
+                downstream = genome[gff.seqid][gff.end - offset2:gff.end + offset]
             else:
                 upstream = dt.reverse_complement(
                     genome[gff.seqid][gff.end:gff.end + offset]
@@ -107,10 +108,12 @@ def main():
     # assembly fragments into contigs
     frgs_fasta = list(frg_names_upstream.values()) + list(frg_names_downstream.values())
     print(frgs_fasta)
-    with Pool(processes=10) as pool:
+    with Pool(processes=3) as pool:
         assembly = pool.map(dt.cap3assembly, frgs_fasta)
     for res in assembly:
         print(res)
+
+    dt.parse_cap3_aln(assembly[0])
 
 if __name__ == '__main__':
     main()

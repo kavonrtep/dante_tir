@@ -2,7 +2,7 @@
 import random
 import subprocess
 import tempfile
-
+import re
 
 class Gff3Feature:
     """
@@ -279,7 +279,7 @@ def cap3assembly(fasta_file):
     :return: path to cap3 output file
     assume that cap3 is in PATH
     """
-    cmd = F'cap3 {fasta_file} -o 20 -p 70 -x cap'
+    cmd = F'cap3 {fasta_file} -o 40 -p 80 -x cap -w'
     stdout_file = F'{fasta_file}.cap.aln'
     stderr_file = F'{fasta_file}.cap.err'
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -290,3 +290,62 @@ def cap3assembly(fasta_file):
         f.write(stderr.decode())
     return stdout_file
 
+
+def parse_cap3_aln(filename):
+    """
+    parse cap3 alignment file
+    :param cap3_aln_file: path to cap3 alignment file
+    :return: dictionary with contigs
+    """
+    results = []
+    with open(filename, 'r') as file:
+        contig_name = ''
+        reads = {}
+        orientations = {}
+        header = True
+        alignments = {}
+        gaps = "-" * 60
+        for line in file:
+            if header:
+                if line.startswith('*******************'):
+                    contig_name = line.split()[1] + line.split()[2]
+                    reads[contig_name] = []
+                    orientations[contig_name] = []
+                elif re.match(r'\d+_\d+_\d+[+-]', line):
+                    parts = line.strip().split()
+                    read_name = parts[0][:-1]
+                    orientation = parts[0][-1]
+                    reads[contig_name].append(read_name)
+                    orientations[contig_name].append(orientation)
+                elif line.startswith('DETAILED DISPLAY OF CONTIGS'):
+                    header = False  # end of part 1, breaking to start part 2
+                    # create empty dictionary for alignments, with sequence names as keys
+                    for contig in reads:
+                        contig_name = ''
+                        alignments[contig] = {}
+                        for read in reads[contig]:
+                            alignments[contig][read] = []  # empty list for alignments
+            else:
+                if line.startswith('*******************'):
+                    contig_name = line.split()[1] + line.split()[2]
+                    positions = 0
+                    segment_number = 0
+                    # fill in gaps for all reads that are asignment to the contig
+                    for read in reads[contig_name]:
+                        alignments[contig_name][read].append([gaps])
+                    print(alignments)
+                elif re.match(r'\d+_\d+_\d+[+-]', line):
+                    parts = line.strip().split()
+                    read_name = parts[0][:-1]
+                    orientation = parts[0][-1]
+                    seq = parts[1]
+                    seq = seq.replace(' ', '-')
+                    alignments[contig][read_name][segment_number] = seq
+                elif line.startswith('consensus'):
+                    segment_number += 1
+                    positions += 60
+                    # fill in gaps for all reads that are asignment to the contig
+                    for read in reads[contig_name]:
+                        alignments[contig_name][read].append([gaps])
+
+    print(alignments)
