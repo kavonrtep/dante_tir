@@ -310,13 +310,13 @@ def parse_cap3_aln(filename):
                 if line.startswith('*******************'):
                     contig_name = line.split()[1] + line.split()[2]
                     reads[contig_name] = []
-                    orientations[contig_name] = []
-                elif re.match(r'\d+_\d+_\d+[+-]', line):
+                    orientations[contig_name] = {}
+                elif re.match(r'\d+_\d+_\d+[+-]', line.strip()):
                     parts = line.strip().split()
                     read_name = parts[0][:-1]
                     orientation = parts[0][-1]
                     reads[contig_name].append(read_name)
-                    orientations[contig_name].append(orientation)
+                    orientations[contig_name][read_name] = orientation
                 elif line.startswith('DETAILED DISPLAY OF CONTIGS'):
                     header = False  # end of part 1, breaking to start part 2
                     # create empty dictionary for alignments, with sequence names as keys
@@ -332,19 +332,34 @@ def parse_cap3_aln(filename):
                     segment_number = 0
                     # fill in gaps for all reads that are asignment to the contig
                     for read in reads[contig_name]:
-                        alignments[contig_name][read].append([gaps])
-                    print(alignments)
+                        alignments[contig_name][read].append(gaps)
                 elif re.match(r'\d+_\d+_\d+[+-]', line):
                     parts = line.strip().split()
                     read_name = parts[0][:-1]
-                    orientation = parts[0][-1]
-                    seq = line[29:].replace(' ',"-").strip()
+                    seq = line[22:].replace(' ',"-").strip()
                     alignments[contig_name][read_name][segment_number] = seq
                 elif line.startswith('consensus'):
                     segment_number += 1
                     positions += 60
                     # fill in gaps for all reads that are asignment to the contig
                     for read in reads[contig_name]:
-                        alignments[contig_name][read].append([gaps])
+                        alignments[contig_name][read].append(gaps)
 
-    print(alignments)
+    # concatenate segments for each read
+    for contig in alignments:
+        for read in alignments[contig]:
+            alignments[contig][read] = ''.join(alignments[contig][read])
+
+    asm = Assembly(reads, orientations, alignments)
+    return asm
+
+
+class Assembly:
+    """
+    Class to store assembly alignments, reads and orientations
+    """
+
+    def __init__(self, reads, orientations, alignments):
+        self.reads = reads
+        self.orientations = orientations
+        self.alignments = alignments
