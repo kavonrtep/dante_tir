@@ -127,8 +127,6 @@ def main():
     ctg_upstream = {}
     ctg_downstream = {}
     for cls, x, y in zip(tir_domains, aln_upstream, aln_downstream):
-        print(cls, x, y)
-        print("-----------------------------")
         ctg_upstream[cls] = dt.parse_cap3_aln(x)
         ctg_downstream[cls] = dt.parse_cap3_aln(y)
 
@@ -145,6 +143,26 @@ def main():
             filename = prefix + '_downstream_' + ctg_name + '.fasta'
             dt.save_fasta_dict_to_file(ctg_downstream[cls].alignments[ctg_name], filename)
 
+    # adjust alignments:
+    for cls, fup, fdown in zip(ctg_upstream,frgs_fasta_upstream, frgs_fasta_downstream):
+        prefix = os.path.join(
+                args.output_dir,
+                cls.replace('/', '_').replace('|', '_')
+                )
+        for ctg_name in ctg_upstream[cls].alignments:
+            aln = ctg_upstream[cls].alignments[ctg_name]
+            orientations = ctg_upstream[cls].orientations[ctg_name]
+            aln = dt.add_masked_reads_to_alignment(aln,orientations,  fup)
+            # export adjusted alignment to file
+            filename = prefix + '_upstream_' + ctg_name + '.fasta'
+            dt.save_fasta_dict_to_file(aln, filename)
+        for ctg_name in ctg_downstream[cls].alignments:
+            aln = ctg_downstream[cls].alignments[ctg_name]
+            orientations = ctg_downstream[cls].orientations[ctg_name]
+            aln = dt.add_masked_reads_to_alignment(aln, orientations, fdown)
+            # export adjusted alignment to file
+            filename = prefix + '_downstream_' + ctg_name + '.fasta'
+            dt.save_fasta_dict_to_file(aln, filename)
 
 
 if __name__ == '__main__':

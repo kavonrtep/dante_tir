@@ -305,6 +305,9 @@ def parse_cap3_aln(filename):
         header = True
         alignments = {}
         gaps = "-" * 60
+        # end gaps are added to beginging and and of all alignments - this will simplify
+        # later adding masked parts of reads which would be otherview out ot range
+        end_gaps = "-" * 100
         for line in file:
             if header:
                 if line.startswith('*******************'):
@@ -324,12 +327,12 @@ def parse_cap3_aln(filename):
                         contig_name = ''
                         alignments[contig] = {}
                         for read in reads[contig]:
-                            alignments[contig][read] = []  # empty list for alignments
+                            alignments[contig][read] = [end_gaps]  # starting gaps of aln
             else:
                 if line.startswith('*******************'):
                     contig_name = line.split()[1] + line.split()[2]
                     positions = 0
-                    segment_number = 0
+                    segment_number = 1  # starting with 1, 0 is for starting gaps
                     # fill in gaps for all reads that are asignment to the contig
                     for read in reads[contig_name]:
                         alignments[contig_name][read].append(gaps)
@@ -348,10 +351,72 @@ def parse_cap3_aln(filename):
     # concatenate segments for each read
     for contig in alignments:
         for read in alignments[contig]:
-            alignments[contig][read] = ''.join(alignments[contig][read])
+            alignments[contig][read] = ''.join(alignments[contig][read]) + end_gaps
 
     asm = Assembly(reads, orientations, alignments)
     return asm
+
+def first_letter_index(s):
+    match = re.search(r'[a-zA-Z]', s)
+    if match:
+        return match.start()
+    else:
+        return -1
+
+
+def replace_substring(s, start, end, replacement):
+    return s[:start] + replacement + s[end:]
+
+def add_masked_reads_to_alignment(alignment, orientations, fasta_file):
+    """
+    add masked reads to alignment
+    :param alignment: alignment dictionary
+    :param fasta_file: path to fasta file with masked reads
+    :return: alignment dictionary with masked reads
+    """
+    reads = fasta_to_dict(fasta_file)
+
+    letter_pattern = re.compile(r'[a-zA-Z]')
+    sum_plus_orientation = sum([1 for x in orientations.values() if x == '+'])
+    orientation_ratio = sum_plus_orientation / len(orientations)
+    print(F'orientation ratio: {orientation_ratio}')
+    print(F'number of reads: {len(orientations)}')
+    print("-----------------------------------")
+    for read_name in alignment:
+        # remove all gaps to get read length
+        read_aligned = alignment[read_name].replace('-', '')
+        aligned_length = len(alignment[read_name].replace('-', ''))
+        read_length_orig = len(reads[read_name])
+        # test if read is not fully aligned
+        if aligned_length < read_length_orig:
+            # use regular expression to get firt leter afte "-"
+            matches = [m for m in letter_pattern.finditer(alignment[read_name])]
+            start_pos = matches[0].start()
+            end_pos = matches[-1].start()
+            # get masked part of the read
+            # first from beggining
+            if orientations[read_name] == '+':
+                r = reads[read_name]
+            else:
+                r = reverse_complement(reads[read_name])
+            s_index = r.find(read_aligned)
+            e_index = s_index + aligned_length
+            left_part = r[:s_index]
+            right_part = r[e_index:]
+            # add masked part to alignment
+            new_aln = replace_substring(alignment[read_name],
+                              start_pos - len(left_part),
+                              start_pos,
+                              left_part.lower())
+            new_aln = replace_substring(new_aln,
+                                end_pos + 1,
+                                end_pos + len(right_part) + 1,
+                                right_part.lower())
+
+            alignment[read_name] = new_aln
+    return alignment
+
+
 
 
 class Assembly:
