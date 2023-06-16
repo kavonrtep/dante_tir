@@ -60,7 +60,9 @@ def main():
     # assembly fragments into contigs
     frgs_fasta_upstream = []
     frgs_fasta_downstream = []
-    for cls in tir_domains:
+    # file are converted to list to be able to use zip function
+    # pass list to map function
+    for cls in frg_names_downstream:
         frgs_fasta_downstream.append(frg_names_downstream[cls])
         frgs_fasta_upstream.append(frg_names_upstream[cls])
     frgs_fasta_both = list(chain.from_iterable(zip(frgs_fasta_upstream, frgs_fasta_downstream)))
@@ -73,12 +75,12 @@ def main():
     aln_upstream = aln[::2]
     aln_downstream = aln[1::2]
 
-
     ctg_upstream = {}
     ctg_downstream = {}
-    for cls, x, y in zip(tir_domains, aln_upstream, aln_downstream):
+    for cls, x, y in zip(frg_names_downstream, aln_upstream, aln_downstream):
         ctg_upstream[cls] = dt.parse_cap3_aln(x)
         ctg_downstream[cls] = dt.parse_cap3_aln(y)
+
 
     # write contigs to file as multifasta
     for cls in ctg_upstream:
