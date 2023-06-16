@@ -35,20 +35,7 @@ def main():
 
     # Read GFF3 file with DANTE annotation of conserved domains of transposases,
     # keep only records with Subclass_1
-    tir_domains = {}
-    with open(args.gff3, 'r') as f:
-        for line in f:
-            if line[0] != '#':
-                gff = dt.Gff3Feature(line)
-                cls = gff.attributes_dict['Final_Classification']
-                if 'Subclass_1' in cls:
-                    if cls not in tir_domains:
-                        tir_domains[cls] = []
-                    tir_domains[cls].append(gff)
-    # print statistics - counts for each classification
-    print("Number of protein domain for each superfamily:")
-    for cls in tir_domains:
-        print(cls, len(tir_domains[cls]))
+    tir_domains = dt.get_tir_records_from_dante(args.gff3)
 
     # Read FASTA file with genome assembly
     genome = dt.fasta_to_dict(args.fasta)
@@ -57,55 +44,18 @@ def main():
     # use strand information to extract upstream and downstream, if strand is
     # negative, then upstream is downstream and vice versa, for neagetive
     # reverse complement the sequence
-    upstream_seq = {}
-    downstream_seq = {}
-    id = 0
-    gff_dict = {}
-    offset = 6000
-    offset2 = 300
-    for cls in tir_domains:
-        upstream_seq[cls] = {}
-        downstream_seq[cls] = {}
-        for gff in tir_domains[cls]:
-            if gff.strand == '+':
-                upstream = genome[gff.seqid][gff.start - offset:gff.start + offset2]
-                downstream = genome[gff.seqid][gff.end - offset2:gff.end + offset]
-            else:
-                upstream = dt.reverse_complement(
-                    genome[gff.seqid][gff.end:gff.end + offset]
-                    )
-                downstream = dt.reverse_complement(
-                    genome[gff.seqid][gff.start - offset:gff.start]
-                    )
-            id += 1
-            upstream_seq[cls][id] = upstream
-            downstream_seq[cls][id] = downstream
-            gff.attributes_dict['ID'] = id
-            gff_dict[id] = gff # to better access gff records.
+    downstream_seq, upstream_seq = dt.extract_flanking_regions(genome, tir_domains)
 
     # write sequences to file in output directory
     # create output directory if it does not exist
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
-    # make fragments and save to file
-    frg_names_upstream = {}
-    frg_names_downstream = {}
-    for cls in tir_domains:
-        # sanitize classification name so it can be used as a file name
-        prefix = os.path.join(
-            args.output_dir,
-            cls.replace('/', '_').replace('|', '_')
-            )
-        frg_names_upstream[cls] = prefix + '_upstream.fasta'
-        frg_names_downstream[cls] = prefix + '_downstream.fasta'
 
-        fragments = dt.fragment_fasta_dict(upstream_seq[cls])
-        dt.save_fasta_dict_to_file(fragments, frg_names_upstream[cls])
-
-        fragments = dt.fragment_fasta_dict(downstream_seq[cls])
-        dt.save_fasta_dict_to_file(fragments, frg_names_downstream[cls])
-
+    # make fragments of upstream and downstream sequences and save to file
+    frg_names_downstream, frg_names_upstream = dt.make_fragment_files(
+        args.output_dir, downstream_seq, upstream_seq
+        )
 
     # assembly fragments into contigs
     frgs_fasta_upstream = []
@@ -163,6 +113,8 @@ def main():
             # export adjusted alignment to file
             filename = prefix + '_downstream_' + ctg_name + '.fasta'
             dt.save_fasta_dict_to_file(aln, filename)
+
+
 
 
 if __name__ == '__main__':

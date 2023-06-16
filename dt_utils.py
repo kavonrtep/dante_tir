@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 import random
 import subprocess
+import os
 import tempfile
 import re
-
+from typing import List, Dict, Tuple
 class Gff3Feature:
     """
     Class for gff3 feature
@@ -238,7 +239,7 @@ def save_fasta_dict_to_file(fasta_dict, fasta_file):
             f.write(">{}\n{}\n".format(k, v.upper()))
 
 
-def reverse_complement(dna):
+def reverse_complement(dna: str) -> str:
     """
     reverse complement of dna sequence, including ambiguous bases
     :param dna:
@@ -251,7 +252,8 @@ def reverse_complement(dna):
     return ''.join(complement[base] for base in reversed(dna.upper()))
 
 
-def fragment_fasta_dict(fasta_dict, step=70, length=100, jitter=10):
+def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
+                                 step=70, length=100, jitter=10) -> Dict[str, str]:
     """
     fragment fasta sequences to overlapping parts
     :param fasta_dict: dictionary with fasta sequences
@@ -270,6 +272,37 @@ def fragment_fasta_dict(fasta_dict, step=70, length=100, jitter=10):
             id = F'{seq_id}_{ii}_{ii + length}'
             fragments_dict[id] = seq[ii:ii + length]
     return fragments_dict
+
+
+def make_fragment_files(output_dir: str,
+                        downstream_seq: Dict[str, Dict[ int, str]],
+                        upstream_seq: Dict[str, Dict[ int, str]]
+                        ) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    make fragment files for downstream and upstream sequences
+    :param output_dir:
+    :param downstream_seq:
+    :param upstream_seq:
+    :return: dictionaries with fragment file names
+    """
+    frg_names_upstream = {}
+    frg_names_downstream = {}
+    for cls in upstream_seq:
+        # sanitize classification name so it can be used as a file name
+        prefix = os.path.join(
+                output_dir,
+                cls.replace('/', '_').replace('|', '_')
+                )
+        frg_names_upstream[cls] = prefix + '_upstream.fasta'
+        frg_names_downstream[cls] = prefix + '_downstream.fasta'
+
+        fragments = dict_fasta_to_dict_fragments(upstream_seq[cls])
+        save_fasta_dict_to_file(fragments, frg_names_upstream[cls])
+
+        fragments = dict_fasta_to_dict_fragments(downstream_seq[cls])
+        save_fasta_dict_to_file(fragments, frg_names_downstream[cls])
+    return frg_names_downstream, frg_names_upstream
+
 
 
 def cap3assembly(fasta_file):
@@ -415,6 +448,66 @@ def add_masked_reads_to_alignment(alignment, orientations, fasta_file):
 
             alignment[read_name] = new_aln
     return alignment
+
+def get_tir_records_from_dante(gff3_file: str) -> Dict[str, List[Gff3Feature]]:
+    tir_domains = {}
+    id = 0
+    with open(gff3_file, 'r') as f:
+        for line in f:
+            if line[0] != '#':
+                gff = Gff3Feature(line)
+                cls = gff.attributes_dict['Final_Classification']
+                if 'Subclass_1' in cls:
+                    id += 1
+                    if cls not in tir_domains:
+                        tir_domains[cls] = []
+                    # add also unique id to the attributes
+                    gff.attributes_dict['ID'] = id
+                    tir_domains[cls].append(gff)
+    # print statistics - counts for each classification
+    print("Number of protein domain for each superfamily:")
+    for cls in tir_domains:
+        print(cls, len(tir_domains[cls]))
+    return tir_domains
+
+
+def extract_flanking_regions(genome: Dict[str, str],
+                             tir_domains: Dict[str, List[Gff3Feature]]
+                             ) -> Tuple[
+    Dict[str, Dict[int, str]],
+    Dict[str, Dict[int, str]]]:
+
+    """
+    Extract flanking regions of TIR domains
+    :param genome:
+    :param tir_domains:
+    :return: downstream and upstream sequences for each TIR domain
+
+    If sequence is on the negative strand,  sequences are reverse complemented
+    """
+    upstream_seq = {}
+    downstream_seq = {}
+    offset = 6000
+    offset2 = 300
+    for cls in tir_domains:
+        upstream_seq[cls] = {}
+        downstream_seq[cls] = {}
+        for gff in tir_domains[cls]:
+            if gff.strand == '+':
+                upstream = genome[gff.seqid][gff.start - offset:gff.start + offset2]
+                downstream = genome[gff.seqid][gff.end - offset2:gff.end + offset]
+            else:
+                upstream = reverse_complement(
+                        genome[gff.seqid][gff.end:gff.end + offset]
+                        )
+                downstream = reverse_complement(
+                        genome[gff.seqid][gff.start - offset:gff.start]
+                        )
+            ID = gff.attributes_dict['ID']
+            upstream_seq[cls][ID] = upstream
+            downstream_seq[cls][ID] = downstream
+
+    return downstream_seq, upstream_seq
 
 
 
