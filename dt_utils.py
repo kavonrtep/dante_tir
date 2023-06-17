@@ -227,17 +227,21 @@ def gff3_to_fasta(gff3_file, fasta_file, additonal_attribute=None):
                 yield [gff3_feature.attributes_dict['ID'], s]
 
 
-def save_fasta_dict_to_file(fasta_dict, fasta_file):
+def save_fasta_dict_to_file(fasta_dict, fasta_file, uppercase=True):
     """
     save fasta dictionary to file
     :param fasta_dict: dictionary with fasta sequences
     :param fasta_file: path to fasta file
     :return:
     """
-    with open(fasta_file, 'w') as f:
-        for k, v in fasta_dict.items():
-            f.write(">{}\n{}\n".format(k, v.upper()))
-
+    if uppercase:
+        with open(fasta_file, 'w') as f:
+            for k, v in fasta_dict.items():
+                f.write(">{}\n{}\n".format(k, v.upper()))
+    else:
+        with open(fasta_file, 'w') as f:
+            for k, v in fasta_dict.items():
+                f.write(">{}\n{}\n".format(k, v))
 
 def reverse_complement(dna: str) -> str:
     """
@@ -324,21 +328,25 @@ def cap3assembly(fasta_file):
     return stdout_file
 
 
-def parse_cap3_aln(filename):
+def parse_cap3_aln(aln_file: str, input_fasta_file: str):
     """
     parse cap3 alignment file
     :param cap3_aln_file: path to cap3 alignment file
+    :param input_fasta_file: path to input fasta file which was used for assembly
     :return: dictionary with contigs
+    
     """
+    print("Parsing cap3 alignment file: ", aln_file)
+    print("Input fasta file: ", input_fasta_file)
     results = []
-    with open(filename, 'r') as file:
+    with open(aln_file, 'r') as file:
         contig_name = ''
         reads = {}
         orientations = {}
         header = True
         alignments = {}
         gaps = "-" * 60
-        # end gaps are added to beginging and and of all alignments - this will simplify
+        # end gaps are added to beginning of all alignments - this will simplify
         # later adding masked parts of reads which would be otherview out ot range
         end_gaps = "-" * 100
         for line in file:
@@ -380,13 +388,37 @@ def parse_cap3_aln(filename):
                     # fill in gaps for all reads that are asignment to the contig
                     for read in reads[contig_name]:
                         alignments[contig_name][read].append(gaps)
+    # keep only alignments that pass following criteria:
+    # 1/ number of reads from distinct elements is above threshold
+    # 2/ orientation of reads is consistent
+    n_min_elements = 4
+    contigs_to_exclude = []
+    for contig in alignments:
+        n_elements = len(set([read.split('_')[0] for read in alignments[contig]]))
+        N_plus = len([read for read in alignments[contig] if orientations[contig][read] == '+'])
+        N_minus = len(orientations[contig]) - N_plus
+        exclude = max(N_plus, N_minus)/sum([N_plus, N_minus]) < 0.8 or n_elements < n_min_elements
+        if exclude:
+            contigs_to_exclude.append(contig)
+    for contig in contigs_to_exclude:
+        del alignments[contig]
+        del reads[contig]
+        del orientations[contig]
+
 
     # concatenate segments for each read
+    adjusted_alignments = {}
     for contig in alignments:
         for read in alignments[contig]:
             alignments[contig][read] = ''.join(alignments[contig][read]) + end_gaps
+        # adjust alignment masked regions
+        adjusted_alignments[contig] = add_masked_reads_to_alignment(
+            alignments[contig],
+            orientations[contig],
+            input_fasta_file
+            )
 
-    asm = Assembly(reads, orientations, alignments)
+    asm = Assembly(reads, orientations, adjusted_alignments)
     return asm
 
 def first_letter_index(s):
@@ -400,7 +432,9 @@ def first_letter_index(s):
 def replace_substring(s, start, end, replacement):
     return s[:start] + replacement + s[end:]
 
-def add_masked_reads_to_alignment(alignment, orientations, fasta_file):
+def add_masked_reads_to_alignment(alignment: Dict[str, str],
+                                  orientations: Dict[str, str],
+                                  fasta_file: str) -> Dict[str, str]:
     """
     add masked reads to alignment
     :param alignment: alignment dictionary
@@ -445,7 +479,6 @@ def add_masked_reads_to_alignment(alignment, orientations, fasta_file):
                                 end_pos + 1,
                                 end_pos + len(right_part) + 1,
                                 right_part.lower())
-
             alignment[read_name] = new_aln
     return alignment
 
