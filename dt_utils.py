@@ -1,10 +1,11 @@
 #!/usr/bin/env python
+import math
 import random
 import subprocess
 import os
 import tempfile
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Set
 class Gff3Feature:
     """
     Class for gff3 feature
@@ -364,11 +365,11 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str):
                 elif line.startswith('DETAILED DISPLAY OF CONTIGS'):
                     header = False  # end of part 1, breaking to start part 2
                     # create empty dictionary for alignments, with sequence names as keys
-                    for contig in reads:
-                        contig_name = ''
-                        alignments[contig] = {}
-                        for read in reads[contig]:
-                            alignments[contig][read] = [end_gaps]  # starting gaps of aln
+                    for contig_name in reads:
+                        #contig_name = ''
+                        alignments[contig_name] = {}
+                        for read in reads[contig_name]:
+                            alignments[contig_name][read] = [end_gaps]  # starting gaps of aln
             else:
                 if line.startswith('*******************'):
                     contig_name = line.split()[1] + line.split()[2]
@@ -393,33 +394,77 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str):
     # 2/ orientation of reads is consistent
     n_min_elements = 4
     contigs_to_exclude = []
-    for contig in alignments:
-        n_elements = len(set([read.split('_')[0] for read in alignments[contig]]))
-        N_plus = len([read for read in alignments[contig] if orientations[contig][read] == '+'])
-        N_minus = len(orientations[contig]) - N_plus
+    for contig_name in alignments:
+        n_elements = len(set([read.split('_')[0] for read in alignments[contig_name]]))
+        N_plus = len([read for read in alignments[contig_name] if orientations[contig_name][read] == '+'])
+        N_minus = len(orientations[contig_name]) - N_plus
         exclude = max(N_plus, N_minus)/sum([N_plus, N_minus]) < 0.8 or n_elements < n_min_elements
         if exclude:
-            contigs_to_exclude.append(contig)
-    for contig in contigs_to_exclude:
-        del alignments[contig]
-        del reads[contig]
-        del orientations[contig]
+            contigs_to_exclude.append(contig_name)
+    for contig_name in contigs_to_exclude:
+        del alignments[contig_name]
+        del reads[contig_name]
+        del orientations[contig_name]
 
 
     # concatenate segments for each read
     adjusted_alignments = {}
-    for contig in alignments:
-        for read in alignments[contig]:
-            alignments[contig][read] = ''.join(alignments[contig][read]) + end_gaps
+    for contig_name in alignments:
+        max_width = 0
+        for read in alignments[contig_name]:
+            alignments[contig_name][read] = ''.join(alignments[contig_name][read]) + end_gaps
+            max_width = max(max_width, len(alignments[contig_name][read]))
+        # fill gaps at the end of alignment to make all alignments of the same width
+        for read in alignments[contig_name]:
+            if len(alignments[contig_name][read]) < max_width:
+                alignments[contig_name][read] += '-' * (max_width - len(alignments[contig_name][read]))
+
+
         # adjust alignment masked regions
-        adjusted_alignments[contig] = add_masked_reads_to_alignment(
-            alignments[contig],
-            orientations[contig],
+        adjusted_alignments[contig_name] = add_masked_reads_to_alignment(
+            alignments[contig_name],
+            orientations[contig_name],
             input_fasta_file
             )
+        # adjust alignment start and end to remove columns with only gaps
+        aln_start = 0
+        aln_end = max_width
+        try:
+            for pos in range(max_width):
+                for read in adjusted_alignments[contig_name]:
+                    if adjusted_alignments[contig_name][read][pos] != '-':
+                        aln_start = pos
+                        raise BreakIt
+        except BreakIt:
+            pass
 
-    asm = Assembly(reads, orientations, adjusted_alignments)
-    return asm
+        try:
+            for pos in range(max_width-1, 0, -1):
+                for read in adjusted_alignments[contig_name]:
+                    if adjusted_alignments[contig_name][read][pos] != '-':
+                        aln_end = pos
+                        raise BreakIt
+        except BreakIt:
+            pass
+
+        print("Alignment start: ", aln_start)
+        print("Alignment end: ", aln_end)
+        for read in adjusted_alignments[contig_name]:
+            trimmed = adjusted_alignments[contig_name][read][aln_start:aln_end]
+            adjusted_alignments[contig_name][read] = trimmed
+
+
+
+    contigs = {}
+    for contig_name in reads:
+        contigs[contig_name] = Contig(reads[contig_name],
+                                      orientations[contig_name],
+                                      adjusted_alignments[contig_name])
+    # asm = Assembly(reads, orientations, adjusted_alignments)
+
+    return contigs
+
+
 
 def first_letter_index(s):
     match = re.search(r'[a-zA-Z]', s)
@@ -444,11 +489,6 @@ def add_masked_reads_to_alignment(alignment: Dict[str, str],
     reads = fasta_to_dict(fasta_file)
 
     letter_pattern = re.compile(r'[a-zA-Z]')
-    sum_plus_orientation = sum([1 for x in orientations.values() if x == '+'])
-    orientation_ratio = sum_plus_orientation / len(orientations)
-    print(F'orientation ratio: {orientation_ratio}')
-    print(F'number of reads: {len(orientations)}')
-    print("-----------------------------------")
     for read_name in alignment:
         # remove all gaps to get read length
         read_aligned = alignment[read_name].replace('-', '')
@@ -545,12 +585,170 @@ def extract_flanking_regions(genome: Dict[str, str],
 
 
 
-class Assembly:
+class Contig:
     """
-    Class to store assembly alignments, reads and orientations
+    Class to store contig sequences as alignment, reads and orientations
     """
 
-    def __init__(self, reads, orientations, alignments):
+    def __init__(self, reads: List[str], orientations: Dict[str, str],
+        alignment: Dict[str, str]):
+        """
+        :type alignments: Dict[str, str]
+        :type orientations: Dict[str, str]
+        :type reads: List[str]
+        """
         self.reads = reads
         self.orientations = orientations
-        self.alignments = alignments
+        self.alignment = alignment
+        self.alignment_total_length = len(alignment[reads[0]])
+        self._pssm = None
+        self._coverage = None
+        self._consensus = None
+        self._masked_proportion = None
+        self._element_list = None
+
+    @property
+    def pssm(self) -> List[Dict[str, int]]:
+        """
+        Calculate position specific frequencies of nucleotides
+        :return: position specific frequencies
+        """
+        if self._pssm is None:
+            self._pssm = self.calculate_pssm()
+        return self._pssm
+
+    @property
+    def coverage(self) -> List[int]:
+        """
+        coverage at each position of the alignment excluding gaps
+        :return: coverage
+        """
+        if self._coverage is None:
+            self._coverage = self.calculate_coverage()
+        return self._coverage
+
+    @property
+    def masked_proportion(self) -> List[float]:
+        """
+        Proportion of masked nucleotides at each position of the alignment
+        :return:masksed proportion
+        """
+        if self._masked_proportion is None:
+            self._masked_proportion = self.calculate_proportion_of_masked_bases()
+        return self._masked_proportion
+
+
+    def calculate_pssm(self) -> List[Dict[str, int]]:
+        """
+        Calculate position specific frequences of nucleotides
+        :return: position specific frequences
+        """
+
+        pssm = []
+        for i in range(self.alignment_total_length):
+            pssm.append({'A': 0, 'C': 0, 'G': 0, 'T': 0, '-': 0})
+        for read_name in self.alignment:
+            for i in range(self.alignment_total_length):
+                pssm[i][self.alignment[read_name][i].upper()] += 1
+        return pssm
+
+    def calculate_coverage(self) -> List[int]:
+        """
+        Calculate coverage by nucleotide along the alignment, excluding gaps
+        :return: coverage
+        """
+        coverage = [0] * self.alignment_total_length
+        # calculate coverage from pssm
+        for i in range(self.alignment_total_length):
+            coverage[i] = sum(self.pssm[i].values()) - self.pssm[i]['-']
+        return coverage
+
+    def calculate_proportion_of_masked_bases(self) -> List[float]:
+        """
+        Calculate proportion of masked bases at each position of
+        the alignment
+        Masked bases are in lower case
+        :return: proportion of masked bases
+        """
+        masked_bases = [0] * self.alignment_total_length
+        for i in range(self.alignment_total_length):
+            for read_name in self.alignment:
+                if self.alignment[read_name][i].islower():
+                    masked_bases[i] += 1
+        # recalculate to proportion using coverage
+        for i in range(self.alignment_total_length):
+            if self.coverage[i] > 0:
+                masked_bases[i] = masked_bases[i] / self.coverage[i]
+            else:
+                masked_bases[i] = -1
+        return masked_bases
+
+    #recalculater pssf frequency to information content
+    def calculate_information_content(self) -> List[float]:
+        """
+        Calculate information content at each position of the alignment
+        ignoring gaps
+        :return: information content
+        """
+        information_content = [0] * self.alignment_total_length
+        for i in range(self.alignment_total_length):
+            if self.coverage[i] > 0:
+                for base in ['A', 'C', 'G', 'T']:
+                    if self.pssm[i][base] > 0:
+                        p = self.pssm[i][base] / self.coverage[i]
+                        information_content[i] += p * math.log2(p)
+                information_content[i] = 2 + information_content[i]
+            else:
+                information_content[i] =  0
+        return information_content
+    @property
+    def consensus(self) -> str:
+        """
+        Calculate consensus sequence of the alignment
+        :return: consensus sequence
+        """
+        if self._consensus is None:
+            self._consensus = self.calculate_consensus_sequence()
+        return self._consensus
+
+    def calculate_consensus_sequence(self) -> str:
+        """
+        Calculate 50% consensus sequence of the alignment,
+        :return: consensus sequence
+        """
+        consensus = []
+        for i in range(self.alignment_total_length):
+            max_base = '-'
+            max_count = 0
+            if self.coverage[i] == 0:
+                consensus += '-'
+                continue
+            consensus += 'N'
+            for base in ['A', 'C', 'G', 'T']:
+                if self.pssm[i][base]/self.coverage[i] > 0.5:
+                    consensus[i] = base
+                    break
+        return "".join(consensus)
+
+    @property
+    def element_list(self) -> Set[str]:
+        """
+        Calculate list of elements in the contig
+        :return: list of elements
+        """
+        if self._element_list is None:
+            elements = set()
+            for read in self.reads:
+                elements.add(read.split('_')[0])
+            self._element_list = elements
+        return self._element_list
+
+    @property
+    def mean_coverage(self) -> float:
+        """
+        Calculate mean coverage of the contig, excluding gaps
+        :return: mean coverage
+        """
+        pass
+
+class BreakIt(Exception): pass

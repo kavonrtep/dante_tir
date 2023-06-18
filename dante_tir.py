@@ -81,23 +81,29 @@ def main():
         ctg_upstream[cls] = dt.parse_cap3_aln(x, frg_names_upstream[cls])
         ctg_downstream[cls] = dt.parse_cap3_aln(y, frg_names_downstream[cls])
 
-
     # write contigs to file as multifasta
     for cls in ctg_upstream:
         prefix = os.path.join(
             args.output_dir,
             cls.replace('/', '_').replace('|', '_')
             )
-        for ctg_name in ctg_upstream[cls].alignments:
+        for ctg_name in ctg_upstream[cls]:
             filename = prefix + '_upstream_' + ctg_name + '.fasta'
-            dt.save_fasta_dict_to_file(ctg_upstream[cls].alignments[ctg_name],
+            dt.save_fasta_dict_to_file(ctg_upstream[cls][ctg_name].alignment,
                                        filename, uppercase=False)
-        for ctg_name in ctg_downstream[cls].alignments:
+            print(ctg_name, cls)
+            test_ctg = ctg_upstream[cls][ctg_name]
+            print(test_ctg.element_list)
+            print(test_ctg.consensus)
+
+        for ctg_name in ctg_downstream[cls]:
             filename = prefix + '_downstream_' + ctg_name + '.fasta'
-            dt.save_fasta_dict_to_file(ctg_downstream[cls].alignments[ctg_name],
+            dt.save_fasta_dict_to_file(ctg_downstream[cls][ctg_name].alignment,
                                        filename, uppercase=False)
-
-
+            print(ctg_name, cls)
+            test_ctg = ctg_downstream[cls][ctg_name]
+            print(test_ctg.element_list)
+            print(test_ctg.consensus)
 
 
 if __name__ == '__main__':
