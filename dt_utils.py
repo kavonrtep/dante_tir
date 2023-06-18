@@ -447,8 +447,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str):
         except BreakIt:
             pass
 
-        print("Alignment start: ", aln_start)
-        print("Alignment end: ", aln_end)
         for read in adjusted_alignments[contig_name]:
             trimmed = adjusted_alignments[contig_name][read][aln_start:aln_end]
             adjusted_alignments[contig_name][read] = trimmed
