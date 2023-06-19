@@ -735,10 +735,23 @@ class Contig:
         :return: list of elements
         """
         if self._element_list is None:
-            elements = set()
+            elements_start = {}
+            elements_end = {}
+            element_list = []
             for read in self.reads:
-                elements.add(read.split('_')[0])
-            self._element_list = elements
+                elements_id, start, end = read.split('_')[0]
+                if elements_id not in elements_start:
+                    elements_start[elements_id] = int(start)
+                    elements_end[elements_id] = int(end)
+                else:
+                    elements_start[elements_id] = min(elements_start[elements_id], int(start))
+                    elements_end[elements_id] = max(elements_end[elements_id], int(end))
+
+            # get keys from dictionary sortef by values (reverse)
+            sorted_keys = sorted(elements_start, key=elements_start.get, reverse=True)
+            for i in range(len(sorted_keys)):
+                element_list.append([i, elements_start[i], elements_end[i]])
+            self._element_list = element_list
         return self._element_list
 
     @property
