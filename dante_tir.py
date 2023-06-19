@@ -93,18 +93,19 @@ def main():
                                        filename, uppercase=False)
             print(ctg_name, cls)
             test_ctg = ctg_upstream[cls][ctg_name]
-            print(test_ctg.element_list)
+            print(test_ctg.element_start_end)
             print(test_ctg.consensus)
-
+            print("masked proportion: ", test_ctg.masked_proportion)
+            print("------------------")
         for ctg_name in ctg_downstream[cls]:
             filename = prefix + '_downstream_' + ctg_name + '.fasta'
             dt.save_fasta_dict_to_file(ctg_downstream[cls][ctg_name].alignment,
                                        filename, uppercase=False)
             print(ctg_name, cls)
             test_ctg = ctg_downstream[cls][ctg_name]
-            print(test_ctg.element_list)
+            print(test_ctg.element_start_end)
             print(test_ctg.consensus)
-
-
+            print("mean coverage: ", test_ctg.mean_coverage)
+            print("masked proportion: ", test_ctg.masked_proportion)
 if __name__ == '__main__':
     main()

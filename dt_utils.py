@@ -603,7 +603,9 @@ class Contig:
         self._coverage = None
         self._consensus = None
         self._masked_proportion = None
-        self._element_list = None
+        self._element_start_end = None
+        self._mean_coverage = None
+        self._information_content = None
 
     @property
     def pssm(self) -> List[Dict[str, int]]:
@@ -681,6 +683,17 @@ class Contig:
                 masked_bases[i] = -1
         return masked_bases
 
+    @property
+    def information_content(self) -> List[float]:
+        """
+        return information content at each position of the alignment
+        :return: List[float]
+        """
+        if self._information_content is None:
+            self._information_content = self.calculate_information_content()
+        return self._information_content
+
+
     #recalculater pssf frequency to information content
     def calculate_information_content(self) -> List[float]:
         """
@@ -729,17 +742,17 @@ class Contig:
         return "".join(consensus)
 
     @property
-    def element_list(self) -> Set[str]:
+    def element_start_end(self) -> Set[str]:
         """
         Calculate list of elements in the contig
         :return: list of elements
         """
-        if self._element_list is None:
+        if self._element_start_end is None:
             elements_start = {}
             elements_end = {}
             element_list = []
             for read in self.reads:
-                elements_id, start, end = read.split('_')[0]
+                elements_id, start, end = read.split('_')
                 if elements_id not in elements_start:
                     elements_start[elements_id] = int(start)
                     elements_end[elements_id] = int(end)
@@ -749,10 +762,10 @@ class Contig:
 
             # get keys from dictionary sortef by values (reverse)
             sorted_keys = sorted(elements_start, key=elements_start.get, reverse=True)
-            for i in range(len(sorted_keys)):
+            for i in sorted_keys:
                 element_list.append([i, elements_start[i], elements_end[i]])
-            self._element_list = element_list
-        return self._element_list
+            self._element_start_end = element_list
+        return self._element_start_end
 
     @property
     def mean_coverage(self) -> float:
@@ -760,6 +773,27 @@ class Contig:
         Calculate mean coverage of the contig, excluding gaps
         :return: mean coverage
         """
-        pass
+        if self._mean_coverage is None:
+            self._mean_coverage = sum(self.coverage) / len(self.coverage)
+        return self._mean_coverage
+
+
+    def find_left_insertion_sites(self):
+        """
+        Find insertion sites in the contig
+        :return: number of insertion sites
+        """
+
+        window_size = 10
+        max_iter = 100
+        # check masked region exists
+        for i in range(max_iter):
+            tir_range = range(i, i + window_size)
+            up_mask = sum(self.masked_proportion[0:i])/(i+1)
+            up_coverage = sum(self.coverage[o:i])/(i+1)
+            up_information_content = sum(self.information_content[range0])/len(range0)
+            tir_0_bits = sum(self.information_content[i])
+            tir_window_bits = sum(self.information_content[tir_range])/len(tir_range)
+
 
 class BreakIt(Exception): pass
