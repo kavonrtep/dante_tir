@@ -7,6 +7,7 @@ DANTE annotation of conserved domains
 import argparse
 import os
 from itertools import chain
+import random
 
 import dt_utils as dt
 from multiprocessing import Pool
@@ -32,6 +33,9 @@ def main():
         )
 
     args = parser.parse_args()
+
+    # set random seed for reproducibility
+    random.seed(42)
 
     # Read GFF3 file with DANTE annotation of conserved domains of transposases,
     # keep only records with Subclass_1
@@ -83,6 +87,7 @@ def main():
 
     # write contigs to file as multifasta
     for cls in ctg_upstream:
+        print("Writing contigs for class {}".format(cls))
         prefix = os.path.join(
             args.output_dir,
             cls.replace('/', '_').replace('|', '_')
@@ -91,21 +96,24 @@ def main():
             filename = prefix + '_upstream_' + ctg_name + '.fasta'
             dt.save_fasta_dict_to_file(ctg_upstream[cls][ctg_name].alignment,
                                        filename, uppercase=False)
-            print(ctg_name, cls)
             test_ctg = ctg_upstream[cls][ctg_name]
-            print(test_ctg.element_start_end)
-            print(test_ctg.consensus)
-            print("masked proportion: ", test_ctg.masked_proportion)
-            print("------------------")
+
+            if ctg_name=='Contig268x':
+                ins = test_ctg.find_left_insertion_sites(debug=True)
+            else:
+                ins = test_ctg.find_left_insertion_sites(debug=False)
+            if ins > -1:
+                print("cls: {}".format(cls))
+                print("ctg_name: {}".format(ctg_name))
+                print("number of reads: ", len(test_ctg.reads))
+                print("Left insertion site: {}".format(ins))
+                print("---------------------------------------")
+
+
         for ctg_name in ctg_downstream[cls]:
             filename = prefix + '_downstream_' + ctg_name + '.fasta'
             dt.save_fasta_dict_to_file(ctg_downstream[cls][ctg_name].alignment,
                                        filename, uppercase=False)
-            print(ctg_name, cls)
             test_ctg = ctg_downstream[cls][ctg_name]
-            print(test_ctg.element_start_end)
-            print(test_ctg.consensus)
-            print("mean coverage: ", test_ctg.mean_coverage)
-            print("masked proportion: ", test_ctg.masked_proportion)
 if __name__ == '__main__':
     main()

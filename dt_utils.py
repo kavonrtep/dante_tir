@@ -778,22 +778,48 @@ class Contig:
         return self._mean_coverage
 
 
-    def find_left_insertion_sites(self):
+    def find_left_insertion_sites(self, debug=False) -> int:
         """
         Find insertion sites in the contig
         :return: number of insertion sites
         """
 
-        window_size = 10
-        max_iter = 100
+        ws = 10
+        max_iter = int(min(100, len(self.coverage)/2 + ws))
+        C1 = 5 # minimum coverage in masked part
+        C2 = 5 # minimum coverage in TIR part
+        left_insertion_site = -1
         # check masked region exists
         for i in range(max_iter):
-            tir_range = range(i, i + window_size)
             up_mask = sum(self.masked_proportion[0:i])/(i+1)
-            up_coverage = sum(self.coverage[o:i])/(i+1)
-            up_information_content = sum(self.information_content[range0])/len(range0)
-            tir_0_bits = sum(self.information_content[i])
-            tir_window_bits = sum(self.information_content[tir_range])/len(tir_range)
+            up_coverage = sum(self.coverage[0:i])/(i+1)
+            up_bits = sum(self.information_content[0:i])/(i+1)
+            tir_0_bits = self.information_content[i]
+            tir_window_bits = sum(self.information_content[i:i + ws])/ws
+            tir_coverage = sum(self.coverage[i:i + ws])/ws
+            tir_mask = sum(self.masked_proportion[i:i + ws])/ws
+            cond1 = up_mask > 0.5 and up_coverage > C1 and up_bits < 1
+            cond2 = tir_0_bits == 2 and tir_window_bits > 1.8 and tir_coverage > C2 and\
+                    tir_mask < 0.1
+            if debug:
+                print(i, up_mask, up_coverage, up_bits, tir_0_bits, tir_window_bits,
+                      tir_coverage, tir_mask, cond1, cond2)
+
+            if cond1 and cond2:
+                left_insertion_site = i
+                break
+
+        if debug:
+            print("coverage")
+            print(self.coverage)
+            print('masked proportion')
+            print(self.masked_proportion)
+            print('information content')
+            print(self.information_content)
+            print('consensus')
+            print(self.consensus)
+
+        return left_insertion_site
 
 
 class BreakIt(Exception): pass
