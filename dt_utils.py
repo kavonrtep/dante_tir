@@ -230,19 +230,27 @@ def gff3_to_fasta(gff3_file, fasta_file, additonal_attribute=None):
 
 def save_fasta_dict_to_file(fasta_dict, fasta_file, uppercase=True):
     """
-    save fasta dictionary to file
+    save fasta dictionary to file, it will handle nested dictionaries
     :param fasta_dict: dictionary with fasta sequences
     :param fasta_file: path to fasta file
     :return:
     """
-    if uppercase:
-        with open(fasta_file, 'w') as f:
-            for k, v in fasta_dict.items():
-                f.write(">{}\n{}\n".format(k, v.upper()))
-    else:
-        with open(fasta_file, 'w') as f:
-            for k, v in fasta_dict.items():
-                f.write(">{}\n{}\n".format(k, v))
+
+    with open(fasta_file, 'w') as f:
+        for k, v in fasta_dict.items():
+            # check is v is string
+            if isinstance(v, str):
+                if uppercase:
+                    f.write(">{}\n{}\n".format(k, v.upper()))
+                else:
+                    f.write(">{}\n{}\n".format(k, v))
+            else:
+                for k2, v2 in v.items():
+                    new_id = F'{k2} {k}'
+                    if uppercase:
+                        f.write(">{}\n{}\n".format(new_id, v2.upper()))
+                    else:
+                        f.write(">{}\n{}\n".format(new_id, v2))
 
 def reverse_complement(dna: str) -> str:
     """
@@ -525,7 +533,10 @@ def get_tir_records_from_dante(gff3_file: str) -> Dict[str, List[Gff3Feature]]:
     id = 0
     with open(gff3_file, 'r') as f:
         for line in f:
-            if line[0] != '#':
+            # line cannot be empty, must be valid gff3 line
+            comment = line[0] == '#'
+            empty = len(line.strip()) == 0
+            if not comment and not empty:
                 gff = Gff3Feature(line)
                 cls = gff.attributes_dict['Final_Classification']
                 if 'Subclass_1' in cls:
@@ -541,32 +552,57 @@ def get_tir_records_from_dante(gff3_file: str) -> Dict[str, List[Gff3Feature]]:
         print(cls, len(tir_domains[cls]))
     return tir_domains
 
+def save_gff3_dict_to_file(gff3_dict_list: Dict[str, List[Gff3Feature]], gff3_file: str):
+    """
+    save list of Gff3Feature to file
+    :param gff3_list: list of Gff3Feature
+    :param gff3_file: path to gff3 file
+    :return:
+    """
+    with open(gff3_file, 'w') as f:
+        # write header
+        f.write("##gff-version 3\n")
+        for cls in gff3_dict_list:
+            for gff in gff3_dict_list[cls]:
+                f.write(str(gff))
 
 def extract_flanking_regions(genome: Dict[str, str],
                              tir_domains: Dict[str, List[Gff3Feature]]
                              ) -> Tuple[
     Dict[str, Dict[int, str]],
-    Dict[str, Dict[int, str]]]:
+    Dict[str, Dict[int, str]],
+    Dict[str, Dict[str, List[int]]]
+]:
 
     """
     Extract flanking regions of TIR domains
     :param genome:
     :param tir_domains:
     :return: downstream and upstream sequences for each TIR domain
+    :return: table with coordinates of donwstream and upstream sequences relative genome
 
     If sequence is on the negative strand,  sequences are reverse complemented
     """
     upstream_seq = {}
     downstream_seq = {}
+    coords = {}
     offset = 6000
     offset2 = 300
     for cls in tir_domains:
+        coords[cls] = {}
         upstream_seq[cls] = {}
         downstream_seq[cls] = {}
         for gff in tir_domains[cls]:
             if gff.strand == '+':
                 upstream = genome[gff.seqid][gff.start - offset:gff.start + offset2]
                 downstream = genome[gff.seqid][gff.end - offset2:gff.end + offset]
+                coords[cls][gff.attributes_dict['ID']] = [
+                    gff.start - offset,
+                    gff.start + offset2,
+                    gff.end - offset2,
+                    gff.end + offset,
+                    gff.strand]
+
             else:
                 upstream = reverse_complement(
                         genome[gff.seqid][gff.end:gff.end + offset]
@@ -574,12 +610,36 @@ def extract_flanking_regions(genome: Dict[str, str],
                 downstream = reverse_complement(
                         genome[gff.seqid][gff.start - offset:gff.start]
                         )
+                coords[cls][gff.attributes_dict['ID']] = [
+                    gff.end,
+                    gff.end + offset,
+                    gff.start - offset,
+                    gff.start,
+                    gff.strand]
+
             ID = gff.attributes_dict['ID']
             upstream_seq[cls][ID] = upstream
-            downstream_seq[cls][ID] = downstream
+            # to make analysis easier, downstream sequence is reverse complemented - insertions site will be on 5' end
+            downstream_seq[cls][ID] = reverse_complement(downstream)
 
-    return downstream_seq, upstream_seq
+    return downstream_seq, upstream_seq, coords
 
+def save_coords_to_file(coords: Dict[str, Dict[str, List[int]]], coords_file: str):
+    """
+    save coordinates to file
+    :param coords:
+    :param coords_file:
+    :return:
+    """
+    with open(coords_file, 'w') as f:
+        # make header
+        f.write("Class\tID\tUpstream_start\tUpstream_end\tDownstream_start\tDownstream_end\tStrand\n")
+        for cls in coords:
+            for ID in coords[cls]:
+                f.write(
+                    F'{cls}\t{ID}\t{coords[cls][ID][0]}\t{coords[cls][ID][1]}\t'
+                    F'{coords[cls][ID][2]}\t{coords[cls][ID][3]}\t{coords[cls][ID][4]}\n'
+                    )
 
 
 
@@ -649,6 +709,9 @@ class Contig:
             pssm.append({'A': 0, 'C': 0, 'G': 0, 'T': 0, '-': 0})
         for read_name in self.alignment:
             for i in range(self.alignment_total_length):
+                # skip if N
+                if self.alignment[read_name][i].upper() == 'N':
+                    continue
                 pssm[i][self.alignment[read_name][i].upper()] += 1
         return pssm
 

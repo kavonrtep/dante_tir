@@ -37,18 +37,38 @@ def main():
     # set random seed for reproducibility
     random.seed(42)
 
+    # create output directory if it does not exist
+    if not os.path.exists(args.output_dir):
+        os.mkdir(args.output_dir)
+
     # Read GFF3 file with DANTE annotation of conserved domains of transposases,
     # keep only records with Subclass_1
     tir_domains = dt.get_tir_records_from_dante(args.gff3)
+
+    # export tir_domains to file
+    dt.save_gff3_dict_to_file(tir_domains, F'{args.output_dir}/tir_domains.gff3')
+
 
     # Read FASTA file with genome assembly
     genome = dt.fasta_to_dict(args.fasta)
 
     # extract sequence for each protein domain including upstream and downstream
     # use strand information to extract upstream and downstream, if strand is
-    # negative, then upstream is downstream and vice versa, for neagetive
+    # negative, then upstream is downstream and vice versa, for negative
     # reverse complement the sequence
-    downstream_seq, upstream_seq = dt.extract_flanking_regions(genome, tir_domains)
+    downstream_seq, upstream_seq, coords = dt.extract_flanking_regions(genome,
+                                                                       tir_domains)
+
+    # export coordinaes with header to file
+    dt.save_coords_to_file(coords, F'{args.output_dir}/tir_flank_coords.txt')
+
+
+    # export downstream and upstream sequences to file
+    dt.save_fasta_dict_to_file(downstream_seq, F'{args.output_dir}/downstream_seq.fasta')
+    dt.save_fasta_dict_to_file(upstream_seq, F'{args.output_dir}/upstream_seq_rc.fasta')
+
+
+
 
     # write sequences to file in output directory
     # create output directory if it does not exist
@@ -98,10 +118,8 @@ def main():
                                        filename, uppercase=False)
             test_ctg = ctg_upstream[cls][ctg_name]
 
-            if ctg_name=='Contig268x':
-                ins = test_ctg.find_left_insertion_sites(debug=True)
-            else:
-                ins = test_ctg.find_left_insertion_sites(debug=False)
+
+            ins = test_ctg.find_left_insertion_sites(debug=False)
             if ins > -1:
                 print("cls: {}".format(cls))
                 print("ctg_name: {}".format(ctg_name))
