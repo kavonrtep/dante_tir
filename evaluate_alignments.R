@@ -242,7 +242,7 @@ for (i in seq_along(both_side_id)) {
   message("ID: ", id)
   print(downstream)
   print(upstream)
-  tir_aln <- pairwiseAlignment(substr(upstream$TIR,1,9), substr(downstream$TIR,1,9), type = "global")
+  tir_aln <- pairwiseAlignment(substr(upstream$TIR,1,15), substr(downstream$TIR,1,15), type = "global")
   message("TIR Alignment partial:")
   print(tir_aln)
   message("TIR Alignment full:")
@@ -252,3 +252,17 @@ for (i in seq_along(both_side_id)) {
   message("----------------------")
 
 }
+
+
+eval_aln_length <- function(s1,s2,L0=1){
+  L <- nchar(s1)
+  sc=numeric()
+  for (i in L0:L){
+    sc[i] <- pairwiseAlignment(substr(s1,1,i), substr(s2,1,i), type = "global", scoreOnly = TRUE)
+  }
+  sc
+}
+
+x <- eval_aln_length(upstream$TIR, downstream$TIR)
+
+stringDist()
