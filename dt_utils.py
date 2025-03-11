@@ -264,10 +264,12 @@ def reverse_complement(dna: str) -> str:
 
     return ''.join(complement[base] for base in reversed(dna.upper()))
 
-
+# note : original settings step=70, length=100, jitter=10
 def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
                                  step=70, length=100, jitter=10) -> Dict[str, str]:
+
     """
+
     fragment fasta sequences to overlapping parts
     :param fasta_dict: dictionary with fasta sequences
     :param step: step size
@@ -345,8 +347,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str):
     :return: dictionary with contigs
     
     """
-    print("Parsing cap3 alignment file: ", aln_file)
-    print("Input fasta file: ", input_fasta_file)
     results = []
     with open(aln_file, 'r') as file:
         contig_name = ''
@@ -459,8 +459,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str):
             trimmed = adjusted_alignments[contig_name][read][aln_start:aln_end]
             adjusted_alignments[contig_name][read] = trimmed
 
-
-
     contigs = {}
     for contig_name in reads:
         contigs[contig_name] = Contig(reads[contig_name],
@@ -528,6 +526,26 @@ def add_masked_reads_to_alignment(alignment: Dict[str, str],
             alignment[read_name] = new_aln
     return alignment
 
+def gff3_quality_ok(gff: Gff3Feature, max_interuptions=3.0, min_identity=0.35,
+                    min_similarity=0.45, max_aln_prop=1.2, min_aln_prop=0.8) -> bool:
+    """
+    Check if quality of gff3 record pass the criteria
+    :param gff3_file: path to gff3 file
+    :param max_interruptions: maximum number of interruptions in alignment per 100 nt
+    :param min_identity: minimum identity
+    :param min_similarity: minimum similarity
+    :param max_aln_prop: maximum proportion of alignment
+    :param min_aln_prop: minimum proportion of alignment
+    :return: True if quality is OK
+    """
+    c1 = min_identity <= float(gff.attributes_dict['Identity'])
+    c2 = min_similarity <= float(gff.attributes_dict['Similarity'])
+    c3 = max_interuptions >= float(gff.attributes_dict['Relat_Interruptions'])
+    c4 = max_aln_prop >= float(gff.attributes_dict['Relat_Length'])
+    c5 = min_aln_prop <= float(gff.attributes_dict['Relat_Length'])
+    return c1 and c2 and c3 and c4 and c5
+
+
 def get_tir_records_from_dante(gff3_file: str) -> Dict[str, List[Gff3Feature]]:
     tir_domains = {}
     id = 0
@@ -539,7 +557,7 @@ def get_tir_records_from_dante(gff3_file: str) -> Dict[str, List[Gff3Feature]]:
             if not comment and not empty:
                 gff = Gff3Feature(line)
                 cls = gff.attributes_dict['Final_Classification']
-                if 'Subclass_1' in cls:
+                if 'Subclass_1' in cls  and gff3_quality_ok(gff):
                     id += 1
                     if cls not in tir_domains:
                         tir_domains[cls] = []
@@ -547,11 +565,11 @@ def get_tir_records_from_dante(gff3_file: str) -> Dict[str, List[Gff3Feature]]:
                     gff.attributes_dict['ID'] = id
                     tir_domains[cls].append(gff)
     # print statistics - counts for each classification
-    print("Number of protein domain for each superfamily:")
+    print("\nNumber of protein domain for each superfamily:")
     for cls in tir_domains:
         print(cls, len(tir_domains[cls]))
+    print("")
     return tir_domains
-
 def save_gff3_dict_to_file(gff3_dict_list: Dict[str, List[Gff3Feature]], gff3_file: str):
     """
     save list of Gff3Feature to file
@@ -594,27 +612,38 @@ def extract_flanking_regions(genome: Dict[str, str],
         downstream_seq[cls] = {}
         for gff in tir_domains[cls]:
             if gff.strand == '+':
-                upstream = genome[gff.seqid][gff.start - offset:gff.start + offset2]
+                u_s = max(0, gff.start - offset)
+                upstream = genome[gff.seqid][u_s:gff.start + offset2]
                 downstream = genome[gff.seqid][gff.end - offset2:gff.end + offset]
+                # coordinates could be out of range - adjust to sequence length
+                offset_u_adjusted = len(upstream) - offset2
+                offset_d_adjusted = len(downstream) - offset2
                 coords[cls][gff.attributes_dict['ID']] = [
-                    gff.start - offset,
+                    gff.seqid,
+                    gff.start - offset_u_adjusted,
                     gff.start + offset2,
                     gff.end - offset2,
-                    gff.end + offset,
+                    gff.end + offset_d_adjusted,
                     gff.strand]
 
             else:
+                d_s = max(0, gff.start - offset)
                 upstream = reverse_complement(
-                        genome[gff.seqid][gff.end:gff.end + offset]
+                        genome[gff.seqid][gff.end - offset2:gff.end + offset]
                         )
                 downstream = reverse_complement(
-                        genome[gff.seqid][gff.start - offset:gff.start]
+                        genome[gff.seqid][d_s:gff.start + offset2]
                         )
+                # coordinates could be out of range - adjust to sequence length
+                offset_u_adjusted = len(upstream) - offset2
+                offset_d_adjusted = len(downstream) - offset2
+
                 coords[cls][gff.attributes_dict['ID']] = [
-                    gff.end,
-                    gff.end + offset,
-                    gff.start - offset,
-                    gff.start,
+                    gff.seqid,
+                    gff.end - offset2,
+                    gff.end + offset_u_adjusted,
+                    gff.start - offset_d_adjusted,
+                    gff.start + offset2,
                     gff.strand]
 
             ID = gff.attributes_dict['ID']
@@ -633,15 +662,15 @@ def save_coords_to_file(coords: Dict[str, Dict[str, List[int]]], coords_file: st
     """
     with open(coords_file, 'w') as f:
         # make header
-        f.write("Class\tID\tUpstream_start\tUpstream_end\tDownstream_start\tDownstream_end\tStrand\n")
+        f.write("SeqID\tClass\tID\tUpstream_start\tUpstream_end\tDownstream_start"
+                "\tDownstream_end\tStrand\n")
         for cls in coords:
             for ID in coords[cls]:
                 f.write(
-                    F'{cls}\t{ID}\t{coords[cls][ID][0]}\t{coords[cls][ID][1]}\t'
-                    F'{coords[cls][ID][2]}\t{coords[cls][ID][3]}\t{coords[cls][ID][4]}\n'
+                    F'{coords[cls][ID][0]}\t{cls}\t{ID}\t{coords[cls][ID][1]}\t'
+                    F'{coords[cls][ID][2]}\t{coords[cls][ID][3]}\t{coords[cls][ID][4]}\t'
+                    F'{coords[cls][ID][5]}\n'
                     )
-
-
 
 class Contig:
     """
@@ -886,3 +915,18 @@ class Contig:
 
 
 class BreakIt(Exception): pass
+
+
+def make_blast_db(fasta_file: str, dbtype: str = 'nucl'):
+    """
+    return None
+    make blast database from fasta file
+    :param fasta_file: path to fasta file
+    :param dbtype: type of database
+    :return: None
+    """
+    cmd = F'makeblastdb -in {fasta_file} -dbtype {dbtype}'
+    # capture output
+    p = subprocess.check_call(cmd, shell=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+    return None
