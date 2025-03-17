@@ -7,6 +7,7 @@ DANTE annotation of conserved domains.
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 from itertools import chain
 import random
@@ -150,8 +151,9 @@ def main():
                     ]
     for f in file_to_copy:
         flist = glob.glob(F'{args.working_dir}/{f}')
+        print(f"Copying {f} to {args.output_dir}")
         for file in flist:
-            os.system(F'cp {file} {args.output_dir}')
+            shutil.copy(file, args.output_dir)
 
 if __name__ == '__main__':
     main()
