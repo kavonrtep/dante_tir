@@ -11,6 +11,8 @@ import shutil
 import subprocess
 from itertools import chain
 import random
+# import version
+
 
 import dt_utils as dt
 from multiprocessing import Pool
