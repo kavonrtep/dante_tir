@@ -29,7 +29,11 @@
 Each DNA transposon superfamily is analyzed separately, with parameters optimized specifically for the characteristics of each superfamily. Detection sensitivity depends on the abundance of transposon elements within the genome. Low-copy superfamilies may be difficult to detect due to insufficient sequence conservation while sensitivity is maximized for superfamilies that are well-represented in the genome. 
 
 ## Installation
-TODO: Add installation instructions
+
+Using conda:
+```
+conda install -c conda-forge -c r -c bioconda -c petrnovak  dante_tir
+```
 
 ## Usage
 
