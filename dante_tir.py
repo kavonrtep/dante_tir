@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from itertools import chain
 import random
-# import version
+from version import __version__
 
 
 import dt_utils as dt
@@ -38,6 +38,10 @@ def main():
         )
     parser.add_argument('-c', '--cpu', help='Number of CPUs to use',
                         type=int, default=1)
+    parser.add_argument(
+        '--version', action='version',
+        version='%(prog)s {version}'.format(version=__version__)
+        )
 
 
     args = parser.parse_args()
