@@ -889,14 +889,15 @@ cluster_tir_sequences <- function(genome_file, gr_fin, output, threads) {
 
     # Build the mmseqs2 command.
     cmd <- paste(
-      "/home/petr/data/miniforge3/envs/dante_tir/bin/mmseqs easy-cluster",
+      "mmseqs easy-cluster",
       tir_seqs_parts_files[i],
       out_prefix,
       tmp_dir,
       "--cluster-mode 0 -v 1 --min-seq-id 0.8",
       "--cov-mode 0 --mask 0 -s 6 --threads", threads
     )
-    system(cmd, intern = TRUE, ignore.stderr = TRUE)
+    print(cmd)
+    system(cmd, intern = TRUE, ignore.stderr=FALSE)
 
     # Read clustering output.
     df <- read.table(cluster_file, header = FALSE, sep = "\t",
