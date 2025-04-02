@@ -6,6 +6,7 @@ import os
 import tempfile
 import re
 from typing import List, Dict, Tuple, Set
+import concurrent.futures
 class Gff3Feature:
     """
     Class for gff3 feature
@@ -329,6 +330,9 @@ def cap3assembly(fasta_file):
     """
     cmd = F'cap3 {fasta_file} -o 40 -p 80 -x cap -w'
     stdout_file = F'{fasta_file}.cap.aln'
+    if os.path.exists(stdout_file):
+        print(F"File {stdout_file} already exists, skipping assembly")
+        return stdout_file
     stderr_file = F'{fasta_file}.cap.err'
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = p.communicate()
@@ -339,135 +343,157 @@ def cap3assembly(fasta_file):
     return stdout_file
 
 
-def parse_cap3_aln(aln_file: str, input_fasta_file: str):
+# Global variable to hold the FASTA dictionary in each worker.
+FASTA_DATA = {}
+
+def init_worker(fasta_data):
+    """Initializer for worker processes: sets the global FASTA_DATA variable."""
+    global FASTA_DATA
+    FASTA_DATA = fasta_data
+
+def process_contig_helper(args):
     """
-    parse cap3 alignment file
-    :param cap3_aln_file: path to cap3 alignment file
-    :param input_fasta_file: path to input fasta file which was used for assembly
-    :return: dictionary with contigs
-    
+    Processes alignment adjustment for one contig.
+
+    :param args: Tuple (contig, aln_data, orient_data, end_gaps)
+    :return: (contig, trimmed) where trimmed is the adjusted alignment for the contig.
     """
-    results = []
+    contig, aln_data, orient_data, end_gaps = args
+    # 1. Join segments for each read and add end gaps.
+    joined = {read: ''.join(aln_data[read]) + end_gaps for read in aln_data}
+    max_width = max(len(seq) for seq in joined.values())
+    # 2. Pad sequences to have uniform width.
+    padded = {
+        read: (seq if len(seq) == max_width else seq + ('-' * (max_width - len(seq)))) for
+        read, seq in joined.items()}
+    # 3. Adjust masked regions using the preloaded FASTA data.
+    adjusted = add_masked_reads_to_alignment(padded, orient_data, FASTA_DATA)
+    # 4. Determine first and last non-gap columns.
+    cols = list(zip(*adjusted.values()))
+    aln_start = 0
+    aln_end = max_width
+    for i, col in enumerate(cols):
+        if any(char != '-' for char in col):
+            aln_start = i
+            break
+    for i, col in enumerate(reversed(cols)):
+        if any(char != '-' for char in col):
+            aln_end = max_width - i
+            break
+    # 5. Trim each read’s sequence.
+    trimmed = {read: seq[aln_start:aln_end] for read, seq in adjusted.items()}
+    return contig, trimmed
+
+
+def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
+    """
+    Parse cap3 alignment file.
+
+    :param aln_file: Path to cap3 alignment file.
+    :param input_fasta_file: Path to input FASTA file used for assembly.
+    :return: Dictionary with contigs.
+    """
+    # Precompile regex to capture read name and orientation.
+    read_line_regex = re.compile(r'^(\d+_\d+_\d+)([+-])')
+    reads = {}
+    orientations = {}
+    alignments = {}
+    header = True
+    gaps = "-" * 60
+    end_gaps = "-" * 100
+
+    contig_name = None
+    segment_number = None
+
+    print("Reading alignment file")
     with open(aln_file, 'r') as file:
-        contig_name = ''
-        reads = {}
-        orientations = {}
-        header = True
-        alignments = {}
-        gaps = "-" * 60
-        # end gaps are added to beginning of all alignments - this will simplify
-        # later adding masked parts of reads which would be otherview out ot range
-        end_gaps = "-" * 100
         for line in file:
             if header:
                 if line.startswith('*******************'):
-                    contig_name = line.split()[1] + line.split()[2]
+                    parts = line.split()
+                    contig_name = parts[1] + parts[2]
                     reads[contig_name] = []
                     orientations[contig_name] = {}
-                elif re.match(r'\d+_\d+_\d+[+-]', line.strip()):
-                    parts = line.strip().split()
-                    read_name = parts[0][:-1]
-                    orientation = parts[0][-1]
-                    reads[contig_name].append(read_name)
-                    orientations[contig_name][read_name] = orientation
-                elif line.startswith('DETAILED DISPLAY OF CONTIGS'):
-                    header = False  # end of part 1, breaking to start part 2
-                    # create empty dictionary for alignments, with sequence names as keys
-                    for contig_name in reads:
-                        #contig_name = ''
-                        alignments[contig_name] = {}
-                        for read in reads[contig_name]:
-                            alignments[contig_name][read] = [end_gaps]  # starting gaps of aln
+                else:
+                    match = read_line_regex.match(line.strip())
+                    if match:
+                        read_name = match.group(1)
+                        orientation = match.group(2)
+                        reads[contig_name].append(read_name)
+                        orientations[contig_name][read_name] = orientation
+                    elif line.startswith('DETAILED DISPLAY OF CONTIGS'):
+                        header = False
+                        # Initialize alignment data structure.
+                        for contig in reads:
+                            alignments[contig] = {}
+                            for read in reads[contig]:
+                                # Each alignment starts with the ending gaps.
+                                alignments[contig][read] = [end_gaps]
             else:
                 if line.startswith('*******************'):
-                    contig_name = line.split()[1] + line.split()[2]
-                    positions = 0
-                    segment_number = 1  # starting with 1, 0 is for starting gaps
-                    # fill in gaps for all reads that are asignment to the contig
+                    parts = line.split()
+                    contig_name = parts[1] + parts[2]
+                    segment_number = 1  # Reset segment number (index 0 is starting gaps)
                     for read in reads[contig_name]:
                         alignments[contig_name][read].append(gaps)
-                elif re.match(r'\d+_\d+_\d+[+-]', line):
+                elif read_line_regex.match(line):
                     parts = line.strip().split()
+                    # Remove the orientation character.
                     read_name = parts[0][:-1]
-                    seq = line[22:].replace(' ',"-").strip()
-                    alignments[contig_name][read_name][segment_number] = seq
+                    # Extract alignment segment.
+                    seq_segment = line[22:].replace(' ', '-').strip()
+                    if len(alignments[contig_name][read_name]) <= segment_number:
+                        alignments[contig_name][read_name].append(seq_segment)
+                    else:
+                        alignments[contig_name][read_name][segment_number] = seq_segment
                 elif line.startswith('consensus'):
                     segment_number += 1
-                    positions += 60
-                    # fill in gaps for all reads that are asignment to the contig
                     for read in reads[contig_name]:
                         alignments[contig_name][read].append(gaps)
-    # keep only alignments that pass following criteria:
-    # 1/ number of reads from distinct elements is above threshold
-    # 2/ orientation of reads is consistent
+
+    print("Filtering contigs")
+    # Filter contigs based on criteria.
     n_min_elements = 4
     contigs_to_exclude = []
-    for contig_name in alignments:
-        n_elements = len(set([read.split('_')[0] for read in alignments[contig_name]]))
-        N_plus = len([read for read in alignments[contig_name] if orientations[contig_name][read] == '+'])
-        N_minus = len(orientations[contig_name]) - N_plus
-        exclude = max(N_plus, N_minus)/sum([N_plus, N_minus]) < 0.8 or n_elements < n_min_elements
-        if exclude:
-            contigs_to_exclude.append(contig_name)
-    for contig_name in contigs_to_exclude:
-        del alignments[contig_name]
-        del reads[contig_name]
-        del orientations[contig_name]
-
-
-    # concatenate segments for each read
-    adjusted_alignments = {}
-    for contig_name in alignments:
-        max_width = 0
-        for read in alignments[contig_name]:
-            alignments[contig_name][read] = ''.join(alignments[contig_name][read]) + end_gaps
-            max_width = max(max_width, len(alignments[contig_name][read]))
-        # fill gaps at the end of alignment to make all alignments of the same width
-        for read in alignments[contig_name]:
-            if len(alignments[contig_name][read]) < max_width:
-                alignments[contig_name][read] += '-' * (max_width - len(alignments[contig_name][read]))
-
-
-        # adjust alignment masked regions
-        adjusted_alignments[contig_name] = add_masked_reads_to_alignment(
-            alignments[contig_name],
-            orientations[contig_name],
-            input_fasta_file
+    for contig in alignments:
+        n_elements = len({read.split('_')[0] for read in alignments[contig]})
+        N_plus = sum(
+            1 for read in alignments[contig] if orientations[contig][read] == '+'
             )
-        # adjust alignment start and end to remove columns with only gaps
-        aln_start = 0
-        aln_end = max_width
-        try:
-            for pos in range(max_width):
-                for read in adjusted_alignments[contig_name]:
-                    if adjusted_alignments[contig_name][read][pos] != '-':
-                        aln_start = pos
-                        raise BreakIt
-        except BreakIt:
-            pass
+        N_minus = len(orientations[contig]) - N_plus
+        if (max(N_plus, N_minus) / (N_plus + N_minus) < 0.8) or (
+                n_elements < n_min_elements):
+            contigs_to_exclude.append(contig)
+    for contig in contigs_to_exclude:
+        del alignments[contig]
+        del reads[contig]
+        del orientations[contig]
 
-        try:
-            for pos in range(max_width-1, 0, -1):
-                for read in adjusted_alignments[contig_name]:
-                    if adjusted_alignments[contig_name][read][pos] != '-':
-                        aln_end = pos
-                        raise BreakIt
-        except BreakIt:
-            pass
+    print("Adjusting alignments")
+    # Preload FASTA data as a dictionary.
+    fasta_data = fasta_to_dict(input_fasta_file)
 
-        for read in adjusted_alignments[contig_name]:
-            trimmed = adjusted_alignments[contig_name][read][aln_start:aln_end]
-            adjusted_alignments[contig_name][read] = trimmed
+    # Create argument tuples for per-contig processing (excluding FASTA data).
+    args_list = [(contig, alignments[contig], orientations[contig], end_gaps) for contig
+        in alignments]
+    adjusted_alignments = {}
+    # Use ProcessPoolExecutor with initializer to pass the FASTA data to workers.
+    with concurrent.futures.ProcessPoolExecutor(
+            initializer=init_worker, initargs=(fasta_data,)
+            ) as executor:
+        futures = {executor.submit(process_contig_helper, args): args[0] for args in
+                   args_list}
+        for future in concurrent.futures.as_completed(futures):
+            contig, trimmed = future.result()
+            adjusted_alignments[contig] = trimmed
 
+    print("Building final contigs")
     contigs = {}
-    for contig_name in reads:
-        contigs[contig_name] = Contig(reads[contig_name],
-                                      orientations[contig_name],
-                                      adjusted_alignments[contig_name])
-    # asm = Assembly(reads, orientations, adjusted_alignments)
-
+    for contig in reads:
+        contigs[contig] = Contig(
+            reads[contig], orientations[contig], adjusted_alignments[contig]
+            )
     return contigs
-
 
 
 def first_letter_index(s):
@@ -483,14 +509,14 @@ def replace_substring(s, start, end, replacement):
 
 def add_masked_reads_to_alignment(alignment: Dict[str, str],
                                   orientations: Dict[str, str],
-                                  fasta_file: str) -> Dict[str, str]:
+                                  reads: Dict[str, str]) -> Dict[str, str]:
     """
     add masked reads to alignment
     :param alignment: alignment dictionary
     :param fasta_file: path to fasta file with masked reads
     :return: alignment dictionary with masked reads
     """
-    reads = fasta_to_dict(fasta_file)
+    #reads = fasta_to_dict(fasta_file)
 
     letter_pattern = re.compile(r'[a-zA-Z]')
     for read_name in alignment:

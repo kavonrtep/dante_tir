@@ -12,7 +12,7 @@ import subprocess
 from itertools import chain
 import random
 from version import __version__
-
+from time import time
 
 import dt_utils as dt
 from multiprocessing import Pool
@@ -120,16 +120,23 @@ def main():
     with Pool(processes=args.cpu) as pool:
         aln = pool.map(dt.cap3assembly, frgs_fasta_both, chunksize=1)
 
+    print("Assembling TIR boundaries done")
     aln_upstream = aln[::2]
     aln_downstream = aln[1::2]
 
     ctg_upstream = {}
     ctg_downstream = {}
+    print("Parsing contigs")
     for cls, x, y in zip(frg_names_downstream, aln_upstream, aln_downstream):
-        ctg_upstream[cls] = dt.parse_cap3_aln(x, frg_names_upstream[cls])
-        ctg_downstream[cls] = dt.parse_cap3_aln(y, frg_names_downstream[cls])
+        t0 = time()
+        print("Parsing contigs for", cls)
+        ctg_upstream[cls] = dt.parse_cap3_aln(x, frg_names_upstream[cls], ncpus=args.cpu)
+        ctg_downstream[cls] = dt.parse_cap3_aln(y, frg_names_downstream[cls], ncpus=args.cpu)
+        t1 = time()
+        print("Parsing contigs done for", cls, "in", t1 - t0, "seconds")
 
     # write contigs to file as multifasta
+    print("Exporting contigs to FASTa")
     for cls in ctg_upstream:
         prefix = os.path.join(
             args.working_dir,
@@ -146,6 +153,7 @@ def main():
                                        filename, uppercase=False)
 
     # find TIRs in contigs using R script
+    print("Detecting TIRs")
     cmd = (F'{script_dir}/detect_tirs.R --contig_dir {args.working_dir} --output '
            F'{args.working_dir} --threads {args.cpu} '
            F'--genome {args.fasta}')

@@ -114,8 +114,7 @@ tryCatch({
   writeXStringSet(tir_seqs, paste0(opt$output, "/DANTE_TIR_final.fasta"))
   tir_seqs_part <- split(tir_seqs, gsub("Class_II_Subclass_1_TIR_", "",
                                         gr_fin$Classification))
-  tir_seqs_parts_files <- paste0(opt$output, "/DANTE_TIR_", names(tir_seqs_part), "
-  .fasta")
+  tir_seqs_parts_files <- paste0(opt$output, "/DANTE_TIR_", names(tir_seqs_part), ".fasta")
   names(tir_seqs_parts_files) <- names(tir_seqs_part)
   for (i in names(tir_seqs_part)) {
     writeXStringSet(tir_seqs_part[[i]], tir_seqs_parts_files[i])

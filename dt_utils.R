@@ -109,12 +109,14 @@ analyze_consensus_matrix <- function(CM, min_coverage = 10, base_pseudocount = 1
 
 
 find_switch_point <- function (aln_info, plotit = FALSE) {
+  invisible(capture.output(
   switch_info <- beast(aln_info$InformationContent, season = 'none',
                        tcp.minmax = c(1,2),
                        torder.minmax = c(0,0),
                        tseg.leftmargin = 10,
                        tseg.rightmargin = 10,
                        quiet         = TRUE)
+  ))
   cp <- switch_info$trend$pos_cp
   cpPr <- switch_info$trend$pos_cpPr
   abrupt_change <- switch_info$trend$pos_cpAbruptChange
@@ -368,12 +370,14 @@ get_coverage_from_blast <- function(bl) {
 }
 
 find_switch_point_from_blast_coverage <- function(cvrg) {
+  invisible(capture.output(
   switch_info <- beast(cvrg, season = 'none',
                        tcp.minmax = c(1, 2),
                        torder.minmax = c(0, 0),
                        tseg.leftmargin = 500,
                        tseg.rightmargin = 300,
                        quiet = TRUE)
+  ))
   cp <- switch_info$trend$pos_cp[1]
   cp_neg <- switch_info$trend$pos_cpNeg
   if (!is.null(cp_neg)) {
@@ -809,7 +813,6 @@ process_region_files <- function(file_list, side) {
       ctg_list[[contig_id]] <- ctg_part
     }
   }
-
   return(list(info = info_list, CM_list = CM_list, ctg_list = ctg_list))
 }
 
@@ -941,8 +944,8 @@ blast_helper <- function(query_up, query_down, db_up, db_down,
     system(paste("makeblastdb -in", db_down, "-dbtype nucl -out", db_down), intern = TRUE)
   }
   # Run BLAST searches for upstream and downstream queries.
-  system(paste("blastn -query", query_up, "-db", db_up, "-out", blast_up_out, blast_args_up), intern = TRUE)
-  system(paste("blastn -query", query_down, "-db", db_down, "-out", blast_down_out, blast_args_down), intern = TRUE)
+  system(paste("blastn -task blastn -query", query_up, "-db", db_up, "-out", blast_up_out, blast_args_up), intern = TRUE)
+  system(paste("blastn -task blastn -query", query_down, "-db", db_down, "-out", blast_down_out, blast_args_down), intern = TRUE)
 
   # Read BLAST outputs.
   blast_up_df <- read.table(blast_up_out, header = FALSE, sep = "\t",
@@ -1096,7 +1099,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
   col_names <- c("qaccver", "saccver", "pident", "length", "mismatch",
                  "gapopen", "qstart", "qend", "sstart", "send", "evalue",
                  "bitscore")
-  blast_args <- "-outfmt 6 -evalue 1e-5"
+  blast_args <- paste0("-outfmt 6 -evalue 1e-5 -num_threads ", threads)
   res2_list <- list()
   gff2_list <- list()
   for (i in seq_along(unique_classes)) {
@@ -1123,6 +1126,11 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
 
     blast_up_df <- blast_res$blast_up_df
     blast_down_df <- blast_res$blast_down_df
+
+    # blast results can be empty, so we need to check if there are any results
+    if (nrow(blast_up_df) == 0 || nrow(blast_down_df) == 0) {
+      next
+    }
 
     upstream_regions <- readDNAStringSet(upstream_db)
     downstream_regions <- readDNAStringSet(downstream_db)
