@@ -209,7 +209,8 @@ eval_aln_length_alt <- function(s1,s2, threshold = 0.74, plot_it = FALSE){
     binom.test(x, i, p=p0, alternative="greater")$p.value
   })
   L1 <- which.min(pvals * sc)
-  mat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -1, baseOnly = TRUE)
+  # mat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -1, baseOnly = TRUE)
+  mat <- nucleotideSubstitutionMatrix(match = 1, mismatch = -1, baseOnly = FALSE)
   s1g <- gsub("-", "", substr(s1,1,L1))
   s2g <- gsub("-", "", substr(s2,1,L1))
   aln <- pairwiseAlignment(s1g, s2g, type = "global", substitutionMatrix = mat)
@@ -513,10 +514,19 @@ detect_tir_pif_harbinger <- function(seq_up, seq_down, cp_up, cp_down,
   TIR_full <- eval_aln_length_alt(substring(seq_up, cp_left, cp_left + 100),
                                   substring(seq_down, cp_right, cp_right + 100))
   # test TSD again in longer region
+
+  if (cp_left - 12 < 1 | cp_right - 12 < 1) {
+    return(NA)
+  }
+
   TSD_test1 <- subseq(seq_up, cp_left - 12, cp_left - 1)
   TSD_test2 <- subseq(seq_down, cp_right - 12, cp_right - 1) |>
     reverseComplement() |>
     as.character()
+  if (nchar(TSD_test1) != 12 | nchar(TSD_test2) != 12) {
+    return(NA)
+  }
+
   TSD_full <- extract_TSD(as.character(TSD_test1), as.character(TSD_test2))
   if (is.na(TSD_full)) {
     return(NA)
@@ -588,11 +598,17 @@ detect_tir_CACTA <- function(seq_up, seq_down, cp_up, cp_down,
 
   TIR_full <- eval_aln_length_alt(substring(seq_up, cp_left, cp_left + 100),
                                   substring(seq_down, cp_right, cp_right + 100))
-  # test TSD again in longer region
+  if (cp_left -12 < 1 | cp_right - 12 < 1) {
+    return(NA)
+  }
+
   TSD_test1 <- subseq(seq_up, cp_left - 12, cp_left - 1)
   TSD_test2 <- subseq(seq_down, cp_right - 12, cp_right - 1) |>
     reverseComplement() |>
     as.character()
+  if (nchar(TSD_test1) != 12 | nchar(TSD_test2) != 12) {
+    return(NA)
+  }
   TSD_full <- extract_TSD(as.character(TSD_test1), as.character(TSD_test2))
   if (is.na(TSD_full)) {
     return(NA)
@@ -637,6 +653,7 @@ detect_tir_tc1 <- function(seq_up, seq_down, cp_up, cp_down,
     return(NA)
   }
   first_TA <- which(TA)[1]
+  tsd_length <- 2
   aln_up_start <- aln_up_start + first_TA + tsd_length
   aln_down_start <- aln_down_start + first_TA + tsd_length
   TIR_up <- substring(TIR_up, first_TA + tsd_length)
@@ -675,11 +692,15 @@ detect_tir <- function(seq_up, seq_down, cp_up, cp_down,
     }
     cp_left <- start(pattern(aln)) + cp_up - w - 1
     cp_right <- start(subject(aln)) + cp_down - w - 1
+    if (cp_left -12 < 1 | cp_right - 12 < 1) {
+      return(NA)
+    }
     TSD_test1 <- substr(seq_up, cp_left - 12, cp_left - 1)
     TSD_test2 <- substr(seq_down, cp_right - 12, cp_right - 1) |>
       DNAString() |>
       reverseComplement() |>
       as.character()
+
     if (nchar(TSD_test1) != 12 | nchar(TSD_test2) != 12) {
       return(NA)
     }
@@ -1210,6 +1231,7 @@ make_detection_worker <- function(detection_fun, cls, seq_upstream, seq_downstre
   if (boundary_mode == "byName") {
     # Assumes cp_boundaries is indexed by ID matching names(seq_upstream)
     return(function(i) {
+
       ID <- names(seq_upstream)[i]
       args_list <- c(list(seq_upstream[i],
                           seq_downstream[i],
@@ -1336,6 +1358,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
                                             cp_boundaries = cp_up_down,
                                             boundary_mode = "byName",
                                             L = 400, min_aln_score = 15)
+
     } else if (cls == "Class_II_Subclass_1_TIR_MuDR_Mutator") {
       worker_fun <- make_detection_worker(detection_fun = detect_tir,
                                             cls = cls,
