@@ -476,6 +476,14 @@ detect_tir_pif_harbinger <- function(seq_up, seq_down, cp_up, cp_down,
                                     L = 100, min_aln_score = 8) {
   W <- 10
   tsd_length <- 3
+  # verify then the extracted sequence will not be out of bounds
+  if (cp_up - L / 2 < 1 | cp_down - L / 2 < 1) {
+    return(NA)
+  }
+  if (cp_up + L / 2 > nchar(seq_up) | cp_down + L / 2 > nchar(seq_down)) {
+    return(NA)
+  }
+
   seq_up_w <- subseq(seq_up, cp_up - L / 2, cp_up + L / 2)
   seq_down_w <- subseq(seq_down, cp_down - L / 2, cp_down + L / 2)
   ID <- names(seq_up)
@@ -548,6 +556,13 @@ detect_tir_CACTA <- function(seq_up, seq_down, cp_up, cp_down,
   W <- 20
   tsd_length <- 3
   min_aln_score <- 8
+  # verify then the extracted sequence will not be out of bounds
+  if (cp_up - L / 2 < 1 | cp_down - L / 2 < 1) {
+    return(NA)
+  }
+  if (cp_up + L / 2 > nchar(seq_up) | cp_down + L / 2 > nchar(seq_down)) {
+    return(NA)
+  }
   seq_up_w <- subseq(seq_up, cp_up - L / 2, cp_up + L / 2)
   seq_down_w <- subseq(seq_down, cp_down - L / 2, cp_down + L / 2)
   ID <- names(seq_up)
@@ -601,7 +616,6 @@ detect_tir_CACTA <- function(seq_up, seq_down, cp_up, cp_down,
   if (cp_left -12 < 1 | cp_right - 12 < 1) {
     return(NA)
   }
-
   TSD_test1 <- subseq(seq_up, cp_left - 12, cp_left - 1)
   TSD_test2 <- subseq(seq_down, cp_right - 12, cp_right - 1) |>
     reverseComplement() |>
@@ -628,6 +642,15 @@ detect_tir_CACTA <- function(seq_up, seq_down, cp_up, cp_down,
 
 detect_tir_tc1 <- function(seq_up, seq_down, cp_up, cp_down,
                            L = 100, min_aln_score = 30){
+
+  # verify then the extracted sequence will not be out of bounds
+  if (cp_up - L / 2 < 1 | cp_down - L / 2 < 1) {
+    return(NA)
+  }
+  if (cp_up + L / 2 > nchar(seq_up) | cp_down + L / 2 > nchar(seq_down)) {
+    return(NA)
+  }
+
   seq_up_w <- subseq(seq_up, cp_up - L / 2, cp_up + L / 2)
   seq_down_w <- subseq(seq_down, cp_down - L / 2, cp_down + L / 2)
   ID <- names(seq_up)
@@ -965,8 +988,12 @@ blast_helper <- function(query_up, query_down, db_up, db_down,
     system(paste("makeblastdb -in", db_down, "-dbtype nucl -out", db_down), intern = TRUE)
   }
   # Run BLAST searches for upstream and downstream queries.
-  system(paste("blastn -task blastn -query", query_up, "-db", db_up, "-out", blast_up_out, blast_args_up), intern = TRUE)
-  system(paste("blastn -task blastn -query", query_down, "-db", db_down, "-out", blast_down_out, blast_args_down), intern = TRUE)
+  system(paste("blastn -task blastn -query", query_up, "-db", db_up,
+               "-out", blast_up_out, blast_args_up),
+         intern = TRUE)
+  system(paste("blastn -task blastn -query", query_down, "-db", db_down,
+               "-out", blast_down_out, blast_args_down),
+         intern = TRUE)
 
   # Read BLAST outputs.
   blast_up_df <- read.table(blast_up_out, header = FALSE, sep = "\t",
@@ -1114,7 +1141,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     writeXStringSet(upstream_cons, cons_file_df$upstream_cons[i])
     writeXStringSet(downstream_cons, cons_file_df$downstream_cons[i])
   }
-
+  #setwd("/mnt/raid/users/tmp/dante_tir_tests")
   dir.create(file.path(output, "blastn"), showWarnings = FALSE)
   # Define BLAST output column names.
   col_names <- c("qaccver", "saccver", "pident", "length", "mismatch",
@@ -1143,7 +1170,8 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
                               blast_args_down = blast_args,
                               col_names = col_names,
                               filter_fun_up = filter_blast,
-                              filter_fun_down = filter_blast)
+                              filter_fun_down = filter_blast
+                              )
 
     blast_up_df <- blast_res$blast_up_df
     blast_down_df <- blast_res$blast_down_df
@@ -1190,6 +1218,9 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
           TSD = tsd
         )
       }
+    }
+    if (length(res2) == 0) {
+      next
     }
     res2_df <- do.call(rbind, lapply(res2, as.data.frame))
     res2_df <- merge(res2_df, tir_flank_coordinates, by = "ID")
@@ -1428,8 +1459,8 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
     blast_upstream <- paste0(output, "/blastn/", cls, "_upstream_round4.blastn")
     blast_downstream <- paste0(output, "/blastn/", cls, "_downstream_round4.blastn")
 
-    blast_args_up <- paste0(outfmt_str, " -evalue 1e-5 -strand plus")
-    blast_args_down <- paste0(outfmt_str, " -evalue 1e-5 -strand minus")
+    blast_args_up <- paste0(outfmt_str, " -evalue 1e-5 -strand plus -num_threads ", threads)
+    blast_args_down <- paste0(outfmt_str, " -evalue 1e-5 -strand minus -num_threads ", threads)
 
     blast_res <- blast_helper(query_up = repre_seqs_files[cls],
                               query_down = repre_seqs_files[cls],
@@ -1506,7 +1537,6 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
                                             boundary_mode = "byIndex",
                                             L = 50, min_aln_score = 8)
     }
-
     parallel_res <- mclapply(seq_along(seq_upstream), worker_fun, mc.cores = threads)
     res4_list <- c(res4_list, Filter(Negate(is.null), parallel_res))
   }
