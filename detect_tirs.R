@@ -33,6 +33,7 @@ source(file.path(script_dir, "dt_utils.R"))
 # Define the path to the TIR flank coordinates file
 tir_flank_file <- file.path(opt$contig_dir, "tir_flank_coords.txt")
 
+
 tryCatch({
 
   ########################################################################################
@@ -50,6 +51,7 @@ tryCatch({
   tir_flank_coordinates <- round1_results$tir_flank_coordinates
 
 
+
   ########################################################################################
   ####                           ROUND 2: CONSENSUS & BLAST                           ####
   ########################################################################################
@@ -57,6 +59,7 @@ tryCatch({
                            tir_flank_coordinates, opt$output, opt$threads)
   gr2 <- round2_results$gr2
   gr_fin <- round2_results$gr_fin
+
 
   ########################################################################################
   ####                            THIRD ROUND OF DETECTION                            ####
@@ -66,6 +69,13 @@ tryCatch({
   gr3 <- round3_results$gr3
   gr3_unique <- round3_results$gr3_unique
   gr_fin <- round3_results$gr_fin
+
+  # exit if no TIRs were found
+    if (length(gr_fin) == 0) {
+        message("No TIRs found")
+        message("Exiting...")
+        q(status = 0)
+    }
 
   ########################################################################################
   ####                       CLUSTERING STEP (mmseqs2)                                ####
