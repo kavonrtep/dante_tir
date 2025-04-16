@@ -42,6 +42,15 @@ def main():
         '--version', action='version',
         version='%(prog)s {version}'.format(version=__version__)
         )
+    print("--------------------------------------------------------")
+    print("")
+    print("          ---|>>>---- DANTE_TIR---- <<<|---")
+    print("")
+    print("Domain Based identification of DNA transposons with TIRs")
+    print("")
+    print("--------------------------------------------------------")
+
+
 
 
     args = parser.parse_args()

@@ -71,11 +71,11 @@ tryCatch({
   gr_fin <- round3_results$gr_fin
 
   # exit if no TIRs were found
-    if (length(gr_fin) == 0) {
-        message("No TIRs found")
-        message("Exiting...")
-        q(status = 0)
-    }
+  if (length(gr_fin) == 0) {
+    message("No TIRs found")
+    message("Exiting...")
+    q(status = 0)
+  }
 
   ########################################################################################
   ####                       CLUSTERING STEP (mmseqs2)                                ####

@@ -156,9 +156,18 @@ extract_info_from_switch_points <- function(aln_info,ctg, cp){
   # min length befor co must be 8 nucleotides
   ctg_upstream_cp <- subseq(ctg, cp - 8, cp - 1)
   ctg_upstream_cp_n_bases <- nchar(gsub("-", "", ctg_upstream_cp))
-  ctg_donwstream_cp <- subseq(ctg, cp , cp + 50)
+  # check if cp + 50 is not out of bounds
+  if ((cp + 50) > width(ctg)[1]){
+    ctg_donwstream_cp <- subseq(ctg, cp , width(ctg)[1])
+  }else{
+    ctg_donwstream_cp <- subseq(ctg, cp , cp + 50)
+  }
   ctg_donwstream_cp_n_bases <- nchar(gsub("-", "", ctg_donwstream_cp))
   pass <- ctg_upstream_cp_n_bases >= 8 & cp_occupied & ctg_donwstream_cp_n_bases >= 45
+  if (sum(pass) == 0){
+    return(NULL)
+  }
+
   ctg_pass <- ctg[pass]
   N <- names(ctg)[pass]
   # N hase syntax ID_start_end
@@ -172,7 +181,17 @@ extract_info_from_switch_points <- function(aln_info,ctg, cp){
   CP <- IDinfo$start - gap_count + cp
   IDinfo$CP <- CP
   IDinfo$coverage <- length(ctg_pass)
-  TIR <- subseq(ctg_pass, cp, cp + 50)
+  # check if cp + 50 is not out of bounds
+  if (cp + 50 > width(ctg_pass)[1]){
+    TIR <- subseq(ctg_pass, cp, width(ctg_pass)[1])
+
+    # add "-" to extend it ot 51
+    TIR2 <- DNAStringSet(paste0(TIR, paste(rep("-", 51 - width(TIR)[1]), collapse = "")))
+    names(TIR2) <- names(TIR)
+    TIR <- TIR2
+  }else{
+    TIR <- subseq(ctg_pass, cp, cp + 50)
+  }
   TSD <- subseq(ctg_pass, cp - 12, cp-1)
   IDinfo$TIR <- as.character(TIR)
   IDinfo$TSD <- as.character(TSD)
@@ -843,6 +862,9 @@ process_region_files <- function(file_list, side) {
     if (!is.na(cp)) {
       contig_id <- gsub("[.]fasta", "", gsub(".+_Contig", "", f))
       info <- extract_info_from_switch_points(aln_info, ctg, cp)
+      if (is.null(info)) {
+        next
+      }
       info$ContigID <- contig_id
       info$Classification <- classification
       info$Filename <- f  # for debugging; remove if not needed
@@ -1022,24 +1044,24 @@ round1 <- function(contig_dir, tir_flank_file) {
   # Read TIR flank coordinates
   tir_flank_coordinates <- read.table(tir_flank_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
   if (nrow(tir_flank_coordinates) == 0) {
-    warning("TIR flank coordinates file is empty.")
+    message("TIR flank coordinates file is empty.")
   }
 
   # Identify upstream and downstream contig files
   upstream_contigs <- dir(contig_dir, pattern = "upstream_Contig", full.names = TRUE)
   if (length(upstream_contigs) == 0) {
-    warning("No upstream contig files found in the specified directory.")
+    message("No upstream contig files found in the specified directory.")
   }
   downstream_contigs <- dir(contig_dir, pattern = "downstream_Contig", full.names = TRUE)
   if (length(downstream_contigs) == 0) {
-    warning("No downstream contig files found in the specified directory.")
+    message("No downstream contig files found in the specified directory.")
   }
 
   message("Processing upstream regions")
   upstream_results <- process_region_files(upstream_contigs, "upstream")
   # Ensure process_region_files returned non-empty 'info'
   if (length(upstream_results$info) == 0) {
-    warning("No upstream information returned from process_region_files.")
+    message("No upstream information returned from process_region_files.")
     upstream_info <- data.frame()
   } else {
     upstream_info <- do.call(rbind, upstream_results$info)
@@ -1049,7 +1071,7 @@ round1 <- function(contig_dir, tir_flank_file) {
   message("Processing downstream regions")
   downstream_results <- process_region_files(downstream_contigs, "downstream")
   if (length(downstream_results$info) == 0) {
-    warning("No downstream information returned from process_region_files.")
+    message("No downstream information returned from process_region_files.")
     downstream_info <- data.frame()
   } else {
     downstream_info <- do.call(rbind, downstream_results$info)
@@ -1150,7 +1172,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
 
   # 1. Early check: if the input result data frame is empty, return empty GRanges.
   if (nrow(res_df) == 0) {
-    warning("Input result data frame is empty. Returning empty GRanges for Round 2.")
+    message("Input result data frame is empty. Returning empty GRanges for Round 2.")
     return(list(gr2 = GRanges(), gr_fin = GRanges()))
   }
 
@@ -1162,7 +1184,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
 
   # 2. Check if any contig sequences were retrieved.
   if (length(ctg_upstream_pass) == 0 || length(ctg_downstream_pass) == 0) {
-    warning("No upstream or downstream contig sequences passed from Round 1. Returning empty results.")
+    message("No upstream or downstream contig sequences passed from Round 1. Returning empty results.")
     return(list(gr2 = GRanges(), gr_fin = GRanges()))
   }
 
@@ -1173,7 +1195,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     cons_seq <- get_consensus_from_aln(ctg_upstream_pass[[i]], 60)
     # 3. Check if the consensus sequence is empty and skip it if so.
     if (length(cons_seq) == 0) {
-      warning("Consensus sequence for upstream contig ", names(ctg_upstream_pass)[i], " is empty. Skipping.")
+      message("Consensus sequence for upstream contig ", names(ctg_upstream_pass)[i], " is empty. Skipping.")
       next
     }
     cons_seqs[[label]] <- cons_seq
@@ -1182,20 +1204,20 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     label <- paste0(ctg_downstream_pass_class[i], "_", names(ctg_downstream_pass)[i], "_downstream")
     cons_seq <- get_consensus_from_aln(ctg_downstream_pass[[i]], 60)
     if (length(cons_seq) == 0) {
-      warning("Consensus sequence for downstream contig ", names(ctg_downstream_pass)[i], " is empty. Skipping.")
+      message("Consensus sequence for downstream contig ", names(ctg_downstream_pass)[i], " is empty. Skipping.")
       next
     }
     cons_seqs[[label]] <- cons_seq
   }
   # 4. If no consensus sequences were generated, exit early.
   if (length(cons_seqs) == 0) {
-    warning("No consensus sequences were generated. Returning empty results.")
+    message("No consensus sequences were generated. Returning empty results.")
     return(list(gr2 = GRanges(), gr_fin = GRanges()))
   }
   cons_seq_out <- unlist(DNAStringSetList(cons_seqs))
   # 5. Verify that the unlisted consensus sequences are non-empty.
   if (length(cons_seq_out) == 0) {
-    warning("Consensus sequences unlisting produced empty result. Returning empty results.")
+    message("No consensus sequences  generated, Returning empty results.")
     return(list(gr2 = GRanges(), gr_fin = GRanges()))
   }
 
@@ -1207,7 +1229,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
   unique_classes <- unique(cons_class)
   # 6. Check if any unique classifications were identified.
   if (length(unique_classes) == 0) {
-    warning("No unique classifications found. Returning empty results.")
+    message("No unique classifications found. Returning empty results.")
     return(list(gr2 = GRanges(), gr_fin = GRanges()))
   }
   cons_file_df <- data.frame(
@@ -1233,7 +1255,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     downstream_cons <- cons_seq_out[cons_class == cls & side == "downstream"]
     # 7. Ensure consensus sequences exist for the current classification.
     if (length(upstream_cons) == 0 || length(downstream_cons) == 0) {
-      warning("Consensus sequences for classification ", cls, " are empty. Skipping this classification.")
+      message("Consensus sequences for classification ", cls, " are empty. Skipping this classification.")
       next
     }
     writeXStringSet(upstream_cons, cons_file_df$upstream_cons[i])
@@ -1253,7 +1275,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     cls <- unique_classes[i]
     # 8. Check that the consensus file names for the current classification are defined.
     if (is.na(cons_file_df$upstream_cons[i]) || is.na(cons_file_df$downstream_cons[i])) {
-      warning("Consensus files for classification ", cls, " are not defined. Skipping BLAST for this class.")
+      message("Consensus files for ", cls, " are not defined. Skipping BLAST for this class.")
       next
     }
     upstream_cons <- cons_file_df$upstream_cons[i]
@@ -1281,7 +1303,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
 
     # 10. Validate blast results; if empty, skip this classification.
     if (nrow(blast_up_df) == 0 || nrow(blast_down_df) == 0) {
-      warning("BLAST returned empty results for classification ", cls, ". Skipping this class.")
+      message("BLAST returned empty results for ", cls, ". Skipping this class.")
       next
     }
 
@@ -1289,7 +1311,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     upstream_regions <- readDNAStringSet(upstream_db)
     downstream_regions <- readDNAStringSet(downstream_db)
     if (length(upstream_regions) == 0 || length(downstream_regions) == 0) {
-      warning("Reading DNAStringSet from databases produced empty results for classification ", cls, ". Skipping this class.")
+      message("No sequences in upstream and donwstream db for ", cls, ". Skipping..")
       next
     }
 
@@ -1331,7 +1353,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     }
     # 12. If no valid BLAST alignment was found, skip this classification.
     if (length(res2) == 0) {
-      warning("No valid BLAST alignment found for classification ", cls, ". Skipping this class.")
+      message("No valid BLAST alignment found for ", cls, ". Skipping this class.")
       next
     }
     res2_df <- do.call(rbind, lapply(res2, as.data.frame))
@@ -1361,7 +1383,6 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
   ## Combine the GRanges from all classifications into gr2,
   ## remove any entries already in gr1, and then combine with gr1 to obtain gr_fin.
   if (length(gff2_list) == 0) {
-    warning("No GRanges objects were created in Round 2. Returning Round 2 result with empty GRanges.")
     gr2 <- GRanges()
   } else {
     gr2 <- unlist(GRangesList(gff2_list))
@@ -1434,7 +1455,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
   # Check for file existence before proceeding.
   if (length(upstream_regions_file) == 0 || length(downstream_regions_file) == 0) {
-    warning("Upstream or Downstream regions files not found in the directory. Returning empty GRanges for Round 3.")
+    message("Upstream or Downstream regions files not found in the directory. Returning empty GRanges for Round 3.")
     return(list(gr3 = GRanges(), gr3_unique = GRanges(), gr_fin = gr_fin))
   }
 
@@ -1454,7 +1475,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
     # Check that a corresponding downstream file is available.
     if (!(cls %in% names(downstream_regions_file))) {
-      warning("No downstream file found for classification ", cls, ". Skipping.")
+      message("No downstream file found for ", cls, ". Skipping.")
       next
     }
 
@@ -1489,7 +1510,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
     # Check that cp_vals are not NULL.
     if (is.null(cp_up) || is.null(cp_down)) {
-      warning("CP detection returned NULL for ", cls, ". Skipping.")
+      message("CP detection returned NULL for ", cls, ". Skipping.")
       next
     }
 
@@ -1512,7 +1533,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
     # Confirm that sequences were retrieved.
     if (length(seq_upstream) == 0 || length(seq_downstream) == 0) {
-      warning("No sequences found in either upstream or downstream for ", cls, ". Skipping.")
+      message("No sequences found in either upstream or downstream for ", cls, ". Skipping.")
       next
     }
 
@@ -1522,7 +1543,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
     # Verify that reordering did not produce any missing values.
     if (any(is.na(names(seq_upstream))) || any(is.na(names(seq_downstream)))) {
-      warning("Sequence reordering resulted in NA names for ", cls, ". Skipping.")
+      message("Sequence reordering resulted in NA names for ", cls, ". Skipping.")
       next
     }
 
@@ -1577,7 +1598,7 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
                                             boundary_mode = "byName",
                                             min_tsd_length = 8, min_aln_score = 15, max_window = 500)
     } else {
-      warning("No detection worker defined for class ", cls, ". Skipping.")
+      message("No detection worker defined for class ", cls, ". Skipping.")
       next
     }
 
@@ -1617,7 +1638,7 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
 
   # 1. Check for valid input in tir_cls_df.
   if (nrow(tir_cls_df) == 0) {
-    warning("tir_cls_df is empty. No representative IDs available. Returning original gr_fin.")
+    message("tir_cls_df is empty. No representative IDs available. Returning original gr_fin.")
     return(list(gr4 = GRanges(), gr_fin = gr_fin, res4_df = data.frame()))
   }
 
@@ -1670,7 +1691,7 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
 
     # 5. Verify that the upstream and downstream database files exist.
     if (!file.exists(upstream_db) || !file.exists(downstream_db)) {
-      warning("Database files for ", cls, " do not exist. Skipping.")
+      message("Database files for ", cls, " do not exist. Skipping.")
       next
     }
 
@@ -1694,7 +1715,7 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
                               filter_fun_down = function(x) filter_blast4(x, upstream = FALSE, max_offset = 120))
 
     if (is.null(blast_res) || is.null(blast_res$blast_up_df) || is.null(blast_res$blast_down_df)) {
-      warning("BLAST helper did not return valid results for ", cls, ". Skipping.")
+      message("BLAST did not return valid results for ", cls, ". Skipping.")
       next
     }
 
@@ -1704,7 +1725,7 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
     cp_up <- get_cp_from_blast4(blast_up_df, upstream = TRUE)
     cp_down <- get_cp_from_blast4(blast_down_df, upstream = FALSE)
     if (is.null(cp_up) || is.null(cp_down) || nrow(cp_up) == 0 || nrow(cp_down) == 0) {
-      warning("CP values from BLAST are missing or empty for ", cls, ". Skipping.")
+      message("No boundaties found for ", cls, ". Skipping.")
       next
     }
 
@@ -1721,7 +1742,7 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
     seq_upstream <- readDNAStringSet(upstream_db)
     seq_downstream <- readDNAStringSet(downstream_db)
     if (length(seq_upstream) == 0 || length(seq_downstream) == 0) {
-      warning("No sequences read from databases for ", cls, ". Skipping.")
+      message("No sequences read from databases for ", cls, ". Skipping.")
       next
     }
     seq_upstream <- seq_upstream[match(rownames(cp_up_down), names(seq_upstream))]
@@ -1771,7 +1792,7 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
                                             boundary_mode = "byIndex",
                                             L = 50, min_aln_score = 8)
     } else {
-      warning("No valid detection worker defined for class ", cls, ". Skipping.")
+      Message("No valid detection worker defined for ", cls, ". Skipping.")
       next
     }
 
