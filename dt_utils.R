@@ -1,3 +1,20 @@
+
+concatGRanges <- function(gr1, gr2) {
+  # 1. Build superset of seqlevels
+  sup <- union(seqlevels(gr1), seqlevels(gr2))
+  sup_si <- Seqinfo(seqnames = sup)
+
+  # 2. Map superset back to each object:
+  #    positions in 'sup' matching existing levels, NA for new ones
+  map1 <- match(sup, seqlevels(gr1))
+  map2 <- match(sup, seqlevels(gr2))
+
+  # 3. Assign Seqinfo with mapping (adds missing levels)
+  seqinfo(gr1, new2old = map1) <- sup_si
+  seqinfo(gr2, new2old = map2) <- sup_si
+  c(gr1, gr2)
+}
+
 get_consensus_from_aln <- function (aln, perc=70){
     nucleotides <- c("A", "C", "G", "T", "N")
     CM <- consensusMatrix(aln)[nucleotides,]
@@ -957,16 +974,24 @@ cluster_tir_sequences <- function(genome_file, gr_fin, output, threads) {
     rep_seq_file <- paste0(out_prefix, ".rep_seq.fasta")
 
     # Build the mmseqs2 command.
-    cmd <- paste(
-      "mmseqs easy-cluster",
+    cmd <- "mmseqs"
+
+
+    args_list <- c(
+      "easy-cluster",
       tir_seqs_parts_files[i],
       out_prefix,
       tmp_dir,
-      "--cluster-mode 0 -v 1 --min-seq-id 0.8",
-      "--cov-mode 0 --mask 0 -s 6 --threads", threads
+      "--cluster-mode",  "0",  "-v", "1", "--min-seq-id", "0.8",
+      "--cov-mode", "0", "--mask", "0",  "-s", "6", "--threads", threads
     )
-    print(cmd)
-    system(cmd, intern = TRUE, ignore.stderr=FALSE)
+    res <- system2(cmd, args = args_list, stdout = TRUE, stderr = TRUE)
+    # export mmeqs2 cluster output for debugging
+    log_file <- paste0(out_prefix, "_log.txt")
+    # write command output to log file
+    cat(paste("Command:", cmd, paste(args_list, collapse = " "),"\n"), file = log_file)
+    cat(res, file = log_file, append = TRUE)
+
 
     # Read clustering output.
     df <- read.table(cluster_file, header = FALSE, sep = "\t",
@@ -1041,6 +1066,7 @@ blast_helper <- function(query_up, query_down, db_up, db_down,
 
 
 round1 <- function(contig_dir, tir_flank_file) {
+  message("\n ---- Identification of elements - Round 1 ----")
   # Read TIR flank coordinates
   tir_flank_coordinates <- read.table(tir_flank_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
   if (nrow(tir_flank_coordinates) == 0) {
@@ -1150,8 +1176,8 @@ round1 <- function(contig_dir, tir_flank_file) {
     gr1 <- prepare_granges(res_df, tir_flank_coordinates, iter = 1)
   }
 
-  message("------------------------------------------------------------------")
   message("Number of elements found in the first round: ", length(gr1))
+  message("------------------------------------------------------------------")
 
   # Return outputs needed by subsequent rounds
   return(list(
@@ -1168,7 +1194,7 @@ round1 <- function(contig_dir, tir_flank_file) {
 ### Updated round2() using the new blast_helper() ###
 round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
                    tir_flank_coordinates, output, threads) {
-  message("Identification of elements - Round 2")
+  message("\n---- Identification of elements - Round 2 ----")
 
   # 1. Early check: if the input result data frame is empty, return empty GRanges.
   if (nrow(res_df) == 0) {
@@ -1388,9 +1414,9 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     gr2 <- unlist(GRangesList(gff2_list))
   }
   gr2_unique <- gr2[!gr2$ID %in% gr1$ID, ]
-  gr_fin <- sort(c(gr1, gr2_unique), by = ~ seqnames * start)
-  message("-----------------------------------------------------------------")
+  gr_fin <- sort(concatGRanges(gr1, gr2_unique), by = ~ seqnames * start)
   message("Number of elements found in the second round: ", length(gr2_unique))
+  message("-----------------------------------------------------------------")
   return(list(gr2 = gr2, gr_fin = gr_fin))
 }
 
@@ -1447,7 +1473,7 @@ make_detection_worker <- function(detection_fun, cls, seq_upstream, seq_downstre
 
 
 round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
-  message("Identification of elements - Round 3")
+  message("\n---- Identification of elements - Round 3 ----")
 
   # Retrieve fasta files for upstream and downstream regions.
   upstream_regions_file <- dir(contig_dir, pattern = "upstream_regions.fasta$", full.names = TRUE)
@@ -1626,15 +1652,16 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
   gr3 <- prepare_granges(res3_df, tir_flank_coordinates, iter = 3)
   gr3_unique <- gr3[!gr3$ID %in% gr_fin$ID, ]
-  gr_fin <- c(gr_fin, gr3_unique)
+  # gr_fin <- c(gr_fin, gr3_unique)
+  gr_fin <- sort(concatGRanges(gr_fin, gr3_unique), by = ~ seqnames * start)
 
-  message("-------------------------------------------------------------------")
   message("Number of elements found in the third round: ", length(gr3_unique))
+  message("-------------------------------------------------------------------")
   return(list(gr3 = gr3, gr3_unique = gr3_unique, gr_fin = gr_fin))
 }
 
 round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, threads, multiplicity_threshold = 5) {
-  message("Identification of elements - Round 4")
+  message("\n---- Identification of elements - Round 4 ----")
 
   # 1. Check for valid input in tir_cls_df.
   if (nrow(tir_cls_df) == 0) {
@@ -1820,10 +1847,11 @@ round4 <- function(gr_fin, tir_cls_df, tir_seqs, tir_flank_coordinates, output, 
 
   # 11. Prepare GRanges for round 4 and update overall results.
   gr4 <- prepare_granges(res4_df, tir_flank_coordinates, iter = 4)
-  gr_fin <- c(gr_fin, gr4)
+  # gr_fin <- c(gr_fin, gr4)
+  gr_fin <- sort(concatGRanges(gr_fin, gr4), by = ~ seqnames * start)
 
-  message("-------------------------------------------------------------------")
   message("Number of elements found in the fourth round: ", length(gr4))
+  message("-------------------------------------------------------------------\n")
   return(list(gr4 = gr4, gr_fin = gr_fin, res4_df = res4_df))
 }
 

@@ -405,7 +405,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
     contig_name = None
     segment_number = None
 
-    print("Reading alignment file")
     with open(aln_file, 'r') as file:
         for line in file:
             if header:
@@ -451,7 +450,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
                     for read in reads[contig_name]:
                         alignments[contig_name][read].append(gaps)
 
-    print("Filtering contigs")
     # Filter contigs based on criteria.
     n_min_elements = 4
     contigs_to_exclude = []
@@ -469,7 +467,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
         del reads[contig]
         del orientations[contig]
 
-    print("Adjusting alignments")
     # Preload FASTA data as a dictionary.
     fasta_data = fasta_to_dict(input_fasta_file)
 
@@ -487,7 +484,6 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
             contig, trimmed = future.result()
             adjusted_alignments[contig] = trimmed
 
-    print("Building final contigs")
     contigs = {}
     for contig in reads:
         contigs[contig] = Contig(

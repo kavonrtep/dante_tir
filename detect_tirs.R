@@ -82,10 +82,10 @@ tryCatch({
   ########################################################################################
   # This block clusters the TIR sequences (from gr_fin) and creates tir_cls_df.
   # It is required by round 4.
-
   message("Clustering TIR sequences with mmseqs2")
   save.image(paste0(opt$output, "/DANTE_TIR.RData"))
   clustering_results <- cluster_tir_sequences(opt$genome, gr_fin, opt$output, opt$threads)
+  message("-------------------------------------------------------------------")
   gr_fin <- clustering_results$gr_fin
   tir_cls_df <- clustering_results$tir_cls_df
   tir_seqs <- clustering_results$tir_seqs  # This is now available for use in Round 4.
@@ -106,11 +106,12 @@ tryCatch({
   colnames(class_table) <- "Number of Elements"
   message("\nTIR classification summary:")
   print(class_table)
+    message("-------------------------------------------------------------------\n")
   class_table$Classification <- rownames(class_table)
   write.table(class_table[, 2:1], file = paste0(opt$output,
                                                 "/TIR_classification_summary.txt"),
               sep = "\t", quote = FALSE, row.names = FALSE)
-  export(gr_fin, paste0(opt$output, "/DANTE_TIR_final.gff"), format = "gff3")
+  export(gr_fin, paste0(opt$output, "/DANTE_TIR_final.gff3"), format = "gff3")
   save.image(paste0(opt$output, "/DANTE_TIR.RData"))
 
 

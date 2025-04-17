@@ -42,6 +42,12 @@ def main():
         '--version', action='version',
         version='%(prog)s {version}'.format(version=__version__)
         )
+    # add debug option
+    parser.add_argument(
+        '--debug', action='store_true',
+        help='Debug mode', default=False
+    )
+
     print("--------------------------------------------------------")
     print("")
     print("          ---|>>>---- DANTE_TIR---- <<<|---")
@@ -125,27 +131,23 @@ def main():
     frgs_fasta_both = list(chain.from_iterable(zip(frgs_fasta_upstream, frgs_fasta_downstream)))
 
     #frgs_fasta = list(frg_names_upstream.values()) + list(frg_names_downstream.values())
-    print("Assembling TIR boundaries")
+    print("Assembling TIR boundaries...", end="")
     with Pool(processes=args.cpu) as pool:
         aln = pool.map(dt.cap3assembly, frgs_fasta_both, chunksize=1)
 
-    print("Assembling TIR boundaries done")
+    print(" done")
     aln_upstream = aln[::2]
     aln_downstream = aln[1::2]
 
     ctg_upstream = {}
     ctg_downstream = {}
-    print("Parsing contigs")
+    print("Parsing assemblies")
     for cls, x, y in zip(frg_names_downstream, aln_upstream, aln_downstream):
-        t0 = time()
-        print("Parsing contigs for", cls)
+        print("Parsing assemblies for", cls, "...", end="")
         ctg_upstream[cls] = dt.parse_cap3_aln(x, frg_names_upstream[cls], ncpus=args.cpu)
         ctg_downstream[cls] = dt.parse_cap3_aln(y, frg_names_downstream[cls], ncpus=args.cpu)
-        t1 = time()
-        print("Parsing contigs done for", cls, "in", t1 - t0, "seconds")
+        print("done")
 
-    # write contigs to file as multifasta
-    print("Exporting contigs to FASTa")
     for cls in ctg_upstream:
         prefix = os.path.join(
             args.working_dir,
@@ -162,7 +164,6 @@ def main():
                                        filename, uppercase=False)
 
     # find TIRs in contigs using R script
-    print("Detecting TIRs")
     cmd = (F'{script_dir}/detect_tirs.R --contig_dir {args.working_dir} --output '
            F'{args.working_dir} --threads {args.cpu} '
            F'--genome {args.fasta}')
@@ -174,9 +175,24 @@ def main():
                     ]
     for f in file_to_copy:
         flist = glob.glob(F'{args.working_dir}/{f}')
-        print(f"Copying {f} to {args.output_dir}")
         for file in flist:
             shutil.copy(file, args.output_dir)
+    # remove working directory if debug is not set
+    if not args.debug:
+        shutil.rmtree(args.working_dir)
+
+    # add version information to gff3 files copied to output directory
+    gff3_files = glob.glob(F'{args.output_dir}/*.gff3')
+    # first line is header - keep it
+    # add second line with version information
+    # then rest of the file
+    for gff3_file in gff3_files:
+        with open(gff3_file, 'r') as f:
+            lines = f.readlines()
+        with open(gff3_file, 'w') as f:
+            f.write(lines[0])
+            f.write(F'##DANTE_TIR version {__version__}\n')
+            f.writelines(lines[1:])
 
 if __name__ == '__main__':
     main()
