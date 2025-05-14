@@ -48,10 +48,40 @@ dante_tir.py -g annotation.gff3 -f genome.fasta -o output_directory [-c number_o
 - `-o, --output_dir`: Output directory where TIR results will be stored (**required**).
 - `-c, --cpu`: Number of CPUs to use (optional, default = 1).
 
+
+### Output:
+
+Output directory will contain:
+- `DANTE_TIR_final.gff3`: GFF3 file with TIR annotations.GFR3 file include following attributes:
+  - `tir_seq5` and `tir_seq3`: 5' and 3' TIR sequences
+  - `tsd` : target site duplication sequence
+  - `Classification`: classification into superfamily
+  - `ID` : unique ID of the element
+- `DANTE_TIR_final.fasta`: Fasta file with complete elements
+- `DANTE_TIR_{superfamily}.fasta`: Fasta file with complete elements for each superfamily
+- `TIR_classification_summary.txt` : Number of TIRs detected in each superfamily
+
+
+## Summarizing DANTE_TIR results
+
+To summarize the results of DANTE_TIR, you can use the `dante_tir_summary.R` script. This script generates a summary HTML report of the annotations. Additionally, the DNA transposon sequences are clustered using `mmseq2` program and library of representative sequences is generated. 
+
+## Example usage:
+```
+dante_tir_summary.R -g DANTE_TIR_final.gff3 -f genome.fasta -o summary_output_directory
+```
+
+Output directory will contain:
+- `report.html`: HTML report with summary of TIR annotations
+- `{superfamily}_representative_elements.csv`: Table with information about representative elements and respective clusters sizes (multiplicity)
+- `{superfamily}_representative_elements_all.fasta`: Fasta file with all representative elements
+- `{superfamily}_representative_elements_multiplicity3plus.fasta`: Fasta file with representative elements with multiplicity 3 or more
+
+   
 ## Dependencies
 
 - DANTE (required for initial conserved domain annotation)
-- (Other dependencies to be added)
+
 
 ## Citation
 
