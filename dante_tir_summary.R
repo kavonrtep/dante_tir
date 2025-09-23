@@ -6,8 +6,12 @@ option_list <- list(
   make_option(c("-g", "--gff"), type = "character", default = NULL, help = "GFF3 file"),
   make_option(c("-o", "--output"), type = "character", default = NULL, help =
     "Output dir"),
-  make_option(c("-f", "--fasta"), type = "character", default = NULL, help = "Fasta file"),
-  make_option(c("-t", "--threads"), type = "integer", default = 1, help = "Number of threads to use")
+  make_option(c("-f", "--fasta"), type = "character", default = NULL, help = "Fasta file with sequences used in GFF3"),
+  make_option(c("-t", "--threads"), type = "integer", default = 1, help = "Number of threads to use"),
+  make_option(c("-d", "--debug"), action = "store_true", default = FALSE, help =
+    "save intermediate data for debugging"),
+  make_option(c("-m", "--min_cluster_size"), type = "integer", default = 3, help =
+    "Minimum cluster size to report representative elements")
 )
 
 description <-
@@ -110,8 +114,12 @@ element_counts_df <- data.frame("Classification" = names(element_counts),
 
 
 
+if (opt$debug) {
+  save.image(file = paste0(opt$output, "/debug.RData"))
+}
 
 file_info <- list()
+repr_seq_min <- DNAStringSetList()
 for (i in names(g_split)) {
   message("Processing ", i)
   file_info[[i]] <- list()
@@ -260,7 +268,11 @@ for (i in names(g_split)) {
     # export representative sequences with cluster sizes at least 3
     repr_seq <- getSeq(tir_complete, cluster_sizes_df$Representative_Element)
     # add cluster size to the names
-    multiplicity <- match(names(repr_seq),cluster_sizes_df$Representative_Element)
+
+    multiplicity <- cluster_sizes_df$Cluster_Size[match(names(repr_seq),
+                                                          cluster_sizes_df$Representative_Element)]
+
+
     # make classification string for repeatmasker:
     cls_string <- paste0("Class_II/Subclass_1/TIR/", gsub("^.+_TIR_","", names(repr_seq)))
     # remove numerical suffixes _1, __2, etc.
@@ -269,8 +281,13 @@ for (i in names(g_split)) {
 
 
     # export only those with cluster size at least 3
-    writeXStringSet(repr_seq[multiplicity >= 3],
-                  file = paste0(opt$output, "/", i, "_representative_elements_multiplicity3plus.fasta"))
+    repr_seq_min[[i]] <- DNAStringSet(repr_seq[multiplicity >= opt$min_cluster_size])
+
+
+
+    writeXStringSet(repr_seq[multiplicity >= opt$min_cluster_size],
+                  file = paste0(opt$output, "/", i, "_representative_elements_min",
+                                opt$min_cluster_size, ".fasta"))
     # export all representative sequences
     writeXStringSet(repr_seq,
                   file = paste0(opt$output, "/", i, "_representative_elements_all.fasta"))
@@ -280,6 +297,11 @@ for (i in names(g_split)) {
     message("Error processing ", i, ": ", e$message)
   })
 }
+
+# combine repr_seq_min to one FASTA file
+writeXStringSet(unlist(repr_seq_min),
+                file = paste0(opt$output, "/all_representative_elements_min",
+                              opt$min_cluster_size, ".fasta"))
 
 generate_html_report(file_info, opt$output, element_counts = element_counts_df)
 

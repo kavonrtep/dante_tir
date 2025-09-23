@@ -52,7 +52,7 @@ dante_tir.py -g annotation.gff3 -f genome.fasta -o output_directory [-c number_o
 ### Output:
 
 Output directory will contain:
-- `DANTE_TIR_final.gff3`: GFF3 file with TIR annotations.GFR3 file include following attributes:
+- `DANTE_TIR_final.gff3`: GFF3 file with TIR annotations. GFF3 file includes following attributes:
   - `tir_seq5` and `tir_seq3`: 5' and 3' TIR sequences
   - `tsd` : target site duplication sequence
   - `Classification`: classification into superfamily
