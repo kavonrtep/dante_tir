@@ -71,11 +71,20 @@ To summarize the results of DANTE_TIR, you can use the `dante_tir_summary.R` scr
 dante_tir_summary.R -g DANTE_TIR_final.gff3 -f genome.fasta -o summary_output_directory
 ```
 
+### Arguments:
+- `-g, --gff`: GFF3 file with DANTE_TIR annotations (**required**)
+- `-f, --fasta`: FASTA file with genome assembly (**required**)
+- `-o, --output`: Output directory for summary results (**required**)
+- `-t, --threads`: Number of threads to use (optional, default = 1)
+- `-d, --debug`: Save intermediate data for debugging (optional)
+- `-m, --min_cluster_size`: Minimum cluster size to report representative elements (optional, default = 3)
+
 Output directory will contain:
 - `report.html`: HTML report with summary of TIR annotations
 - `{superfamily}_representative_elements.csv`: Table with information about representative elements and respective clusters sizes (multiplicity)
 - `{superfamily}_representative_elements_all.fasta`: Fasta file with all representative elements
-- `{superfamily}_representative_elements_multiplicity3plus.fasta`: Fasta file with representative elements with multiplicity 3 or more
+- `{superfamily}_representative_elements_min{min_cluster_size}.fasta`: Fasta file with representative elements meeting a minimum cluster size threshold
+- `all_representative_elements_min{min_cluster_size}.fasta`: Combined fasta file with all representative elements from all superfamilies meeting a minimum cluster size threshold
 
    
 ## Dependencies
