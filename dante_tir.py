@@ -220,8 +220,9 @@ def main():
 
     aln_idx = 0
     for cls in frg_names_downstream:
-        downstream_parts = frg_names_downstream[cls] if isinstance(frg_names_downstream[cls], list) else [frg_names_downstream[cls]]
-        upstream_parts = frg_names_upstream[cls] if isinstance(frg_names_upstream[cls], list) else [frg_names_upstream[cls]]
+        # frg_names now contains dicts with part numbers as keys
+        downstream_parts_dict = frg_names_downstream[cls]
+        upstream_parts_dict = frg_names_upstream[cls]
 
         # Collect all aln files for this class
         aln_upstream_parts = []
@@ -229,7 +230,11 @@ def main():
         upstream_fasta_parts = []
         downstream_fasta_parts = []
 
-        for up_file, down_file in zip(upstream_parts, downstream_parts):
+        # Iterate through all parts for this class
+        for part_num in sorted(downstream_parts_dict.keys()):
+            up_file = upstream_parts_dict[part_num]
+            down_file = downstream_parts_dict[part_num]
+
             aln_upstream_parts.append(aln[aln_idx])
             aln_idx += 1
             aln_downstream_parts.append(aln[aln_idx])
