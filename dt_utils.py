@@ -321,6 +321,70 @@ def make_fragment_files(output_dir: str,
 
 
 
+def split_fasta_coordinated(upstream_file: str, downstream_file: str,
+                             threshold: int) -> Tuple[List[str], List[str]]:
+    """
+    Split upstream and downstream FASTA files into parts with coordinated sequence boundaries.
+
+    This ensures that both upstream and downstream files are split at the same sequence IDs,
+    so they remain paired throughout the pipeline.
+
+    :param upstream_file: Path to upstream FASTA file
+    :param downstream_file: Path to downstream FASTA file
+    :param threshold: Maximum number of sequences per part
+    :return: Tuple of (list of upstream part files, list of downstream part files)
+    """
+    # Read both files and extract sequence IDs
+    upstream_data = fasta_to_dict(upstream_file)
+    downstream_data = fasta_to_dict(downstream_file)
+
+    # Verify same sequences in both files
+    upstream_ids = set(upstream_data.keys())
+    downstream_ids = set(downstream_data.keys())
+
+    if upstream_ids != downstream_ids:
+        raise ValueError(
+            f"Sequence IDs mismatch between upstream and downstream files. "
+            f"Upstream only: {len(upstream_ids - downstream_ids)}, "
+            f"Downstream only: {len(downstream_ids - upstream_ids)}"
+        )
+
+    # If number of sequences is below threshold, no splitting needed
+    if len(upstream_ids) <= threshold:
+        return [upstream_file], [downstream_file]
+
+    # Sort sequence IDs for consistent ordering
+    seq_ids = sorted(upstream_ids)
+
+    # Create parts
+    upstream_parts = []
+    downstream_parts = []
+    part_num = 1
+
+    for i in range(0, len(seq_ids), threshold):
+        part_seq_ids = seq_ids[i:i + threshold]
+
+        # Create part-specific filenames
+        base_upstream = upstream_file.rsplit('.', 1)[0] if '.' in upstream_file else upstream_file
+        base_downstream = downstream_file.rsplit('.', 1)[0] if '.' in downstream_file else downstream_file
+
+        upstream_part_file = F'{base_upstream}.part_{part_num:03d}.fasta'
+        downstream_part_file = F'{base_downstream}.part_{part_num:03d}.fasta'
+
+        # Extract and save sequences for this part
+        upstream_part_dict = {seq_id: upstream_data[seq_id] for seq_id in part_seq_ids}
+        downstream_part_dict = {seq_id: downstream_data[seq_id] for seq_id in part_seq_ids}
+
+        save_fasta_dict_to_file(upstream_part_dict, upstream_part_file)
+        save_fasta_dict_to_file(downstream_part_dict, downstream_part_file)
+
+        upstream_parts.append(upstream_part_file)
+        downstream_parts.append(downstream_part_file)
+        part_num += 1
+
+    return upstream_parts, downstream_parts
+
+
 def cap3assembly(fasta_file):
     """
     run cap3 assembly
@@ -341,6 +405,53 @@ def cap3assembly(fasta_file):
     with open(stderr_file, 'w') as f:
         f.write(stderr.decode())
     return stdout_file
+
+
+def cap3assembly_with_split(fasta_file, split_threshold=None):
+    """
+    Run CAP3 assembly with optional splitting for large files.
+
+    If the FASTA file contains more sequences than split_threshold, it will be
+    split into multiple parts, each assembled separately. The results are then
+    merged into a single output.
+
+    :param fasta_file: Path to FASTA file
+    :param split_threshold: Maximum sequences per CAP3 run. If None, no splitting.
+    :return: List of CAP3 output files (one element if no split, multiple if split)
+    """
+    if split_threshold is None:
+        # No splitting, just run CAP3 normally
+        return [cap3assembly(fasta_file)]
+
+    # Count sequences in file
+    fasta_dict = fasta_to_dict(fasta_file)
+    num_sequences = len(fasta_dict)
+
+    if num_sequences <= split_threshold:
+        # Below threshold, no splitting needed
+        return [cap3assembly(fasta_file)]
+
+    # Need to split the file
+    seq_ids = sorted(fasta_dict.keys())
+    output_files = []
+    part_num = 1
+
+    for i in range(0, num_sequences, split_threshold):
+        part_seq_ids = seq_ids[i:i + split_threshold]
+
+        # Create part-specific filename
+        base_file = fasta_file.rsplit('.', 1)[0] if '.' in fasta_file else fasta_file
+        part_file = F'{base_file}.part_{part_num:03d}.fasta'
+
+        # Extract and save sequences for this part
+        part_dict = {seq_id: fasta_dict[seq_id] for seq_id in part_seq_ids}
+        save_fasta_dict_to_file(part_dict, part_file)
+
+        # Run CAP3 on this part
+        output_files.append(cap3assembly(part_file))
+        part_num += 1
+
+    return output_files
 
 
 # Global variable to hold the FASTA dictionary in each worker.
@@ -385,13 +496,104 @@ def process_contig_helper(args):
     return contig, trimmed
 
 
-def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
+def parse_cap3_aln(aln_file, input_fasta_file: str, ncpus: int = 1):
     """
-    Parse cap3 alignment file.
+    Parse cap3 alignment file(s).
+
+    Handles both single alignment file and multiple alignment files (from splitting).
+    When multiple files are provided, contigs from all parts are merged into a single
+    output dictionary.
+
+    :param aln_file: Path to cap3 alignment file, or list of paths for split assemblies.
+    :param input_fasta_file: Path to input FASTA file used for assembly, or list of paths for splits.
+    :param ncpus: Number of CPUs to use for processing.
+    :return: Dictionary with contigs (merged from all parts if split).
+    """
+    # Handle both single file and list of files
+    if isinstance(aln_file, str):
+        aln_files = [aln_file]
+    else:
+        aln_files = aln_file
+
+    if isinstance(input_fasta_file, str):
+        fasta_files = [input_fasta_file]
+    else:
+        fasta_files = input_fasta_file
+
+    # Verify file counts match
+    if len(aln_files) != len(fasta_files):
+        raise ValueError(
+            f"Number of alignment files ({len(aln_files)}) does not match "
+            f"number of FASTA files ({len(fasta_files)})"
+        )
+
+    # Process each part separately, then merge
+    all_reads = {}
+    all_orientations = {}
+    all_alignments = {}
+    all_fasta_data = {}
+
+    for aln_file_part, fasta_file_part in zip(aln_files, fasta_files):
+        reads, orientations, alignments = _parse_single_cap3_aln(aln_file_part)
+
+        # Merge with all previous parts
+        all_reads.update(reads)
+        all_orientations.update(orientations)
+        all_alignments.update(alignments)
+
+        # Load FASTA data for this part
+        fasta_data = fasta_to_dict(fasta_file_part)
+        all_fasta_data.update(fasta_data)
+
+    # Filter contigs based on criteria (applied after merging all parts)
+    n_min_elements = 4
+    contigs_to_exclude = []
+    for contig in all_alignments:
+        n_elements = len({read.split('_')[0] for read in all_alignments[contig]})
+        N_plus = sum(
+            1 for read in all_alignments[contig] if all_orientations[contig][read] == '+'
+            )
+        N_minus = len(all_orientations[contig]) - N_plus
+        if (max(N_plus, N_minus) / (N_plus + N_minus) < 0.8) or (
+                n_elements < n_min_elements):
+            contigs_to_exclude.append(contig)
+    for contig in contigs_to_exclude:
+        del all_alignments[contig]
+        del all_reads[contig]
+        del all_orientations[contig]
+
+    # Create argument tuples for per-contig processing
+    args_list = [(contig, all_alignments[contig], all_orientations[contig], "-" * 100) for contig
+        in all_alignments]
+    adjusted_alignments = {}
+
+    # Use ProcessPoolExecutor with initializer to pass the FASTA data to workers.
+    with concurrent.futures.ProcessPoolExecutor(
+            initializer=init_worker, initargs=(all_fasta_data,)
+            ) as executor:
+        futures = {executor.submit(process_contig_helper, args): args[0] for args in
+                   args_list}
+        for future in concurrent.futures.as_completed(futures):
+            contig, trimmed = future.result()
+            adjusted_alignments[contig] = trimmed
+
+    contigs = {}
+    for contig in all_reads:
+        contigs[contig] = Contig(
+            all_reads[contig], all_orientations[contig], adjusted_alignments[contig]
+            )
+    return contigs
+
+
+def _parse_single_cap3_aln(aln_file: str) -> Tuple[Dict, Dict, Dict]:
+    """
+    Parse a single cap3 alignment file.
+
+    Helper function that parses one alignment file and returns raw data structures
+    (before filtering). Used by parse_cap3_aln() to handle multiple split files.
 
     :param aln_file: Path to cap3 alignment file.
-    :param input_fasta_file: Path to input FASTA file used for assembly.
-    :return: Dictionary with contigs.
+    :return: Tuple of (reads, orientations, alignments) dictionaries.
     """
     # Precompile regex to capture read name and orientation.
     read_line_regex = re.compile(r'^(\d+_\d+_\d+)([+-])')
@@ -450,46 +652,7 @@ def parse_cap3_aln(aln_file: str, input_fasta_file: str, ncpus: int = 1):
                     for read in reads[contig_name]:
                         alignments[contig_name][read].append(gaps)
 
-    # Filter contigs based on criteria.
-    n_min_elements = 4
-    contigs_to_exclude = []
-    for contig in alignments:
-        n_elements = len({read.split('_')[0] for read in alignments[contig]})
-        N_plus = sum(
-            1 for read in alignments[contig] if orientations[contig][read] == '+'
-            )
-        N_minus = len(orientations[contig]) - N_plus
-        if (max(N_plus, N_minus) / (N_plus + N_minus) < 0.8) or (
-                n_elements < n_min_elements):
-            contigs_to_exclude.append(contig)
-    for contig in contigs_to_exclude:
-        del alignments[contig]
-        del reads[contig]
-        del orientations[contig]
-
-    # Preload FASTA data as a dictionary.
-    fasta_data = fasta_to_dict(input_fasta_file)
-
-    # Create argument tuples for per-contig processing (excluding FASTA data).
-    args_list = [(contig, alignments[contig], orientations[contig], end_gaps) for contig
-        in alignments]
-    adjusted_alignments = {}
-    # Use ProcessPoolExecutor with initializer to pass the FASTA data to workers.
-    with concurrent.futures.ProcessPoolExecutor(
-            initializer=init_worker, initargs=(fasta_data,)
-            ) as executor:
-        futures = {executor.submit(process_contig_helper, args): args[0] for args in
-                   args_list}
-        for future in concurrent.futures.as_completed(futures):
-            contig, trimmed = future.result()
-            adjusted_alignments[contig] = trimmed
-
-    contigs = {}
-    for contig in reads:
-        contigs[contig] = Contig(
-            reads[contig], orientations[contig], adjusted_alignments[contig]
-            )
-    return contigs
+    return reads, orientations, alignments
 
 
 def first_letter_index(s):

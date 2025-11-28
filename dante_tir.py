@@ -39,6 +39,10 @@ def main():
     parser.add_argument('-c', '--cpu', help='Number of CPUs to use',
                         type=int, default=1)
     parser.add_argument(
+        '--max_class_size', help='Maximum number of sequences per class before splitting for CAP3 assembly',
+        type=int, default=None
+    )
+    parser.add_argument(
         '--version', action='version',
         version='%(prog)s {version}'.format(version=__version__)
         )
@@ -121,31 +125,74 @@ def main():
         )
 
     # assembly fragments into contigs
-    frgs_fasta_upstream = []
-    frgs_fasta_downstream = []
+    # Handle optional splitting of large classes
+    if args.max_class_size:
+        print(f"Splitting large classes (threshold: {args.max_class_size} sequences)...", end="")
+        # Split upstream and downstream files while keeping them paired
+        split_upstream = {}
+        split_downstream = {}
+        for cls in frg_names_upstream:
+            up_parts, down_parts = dt.split_fasta_coordinated(
+                frg_names_upstream[cls],
+                frg_names_downstream[cls],
+                args.max_class_size
+            )
+            split_upstream[cls] = up_parts
+            split_downstream[cls] = down_parts
+        frg_names_upstream = split_upstream
+        frg_names_downstream = split_downstream
+        print(" done")
+
+    # Build flat lists of files for parallel processing, tracking class/part mapping
+    frgs_fasta_both = []
+    frgs_class_mapping = []  # Track which class each file pair belongs to
     # file are converted to list to be able to use zip function
     # pass list to map function
     for cls in frg_names_downstream:
-        frgs_fasta_downstream.append(frg_names_downstream[cls])
-        frgs_fasta_upstream.append(frg_names_upstream[cls])
-    frgs_fasta_both = list(chain.from_iterable(zip(frgs_fasta_upstream, frgs_fasta_downstream)))
+        downstream_parts = frg_names_downstream[cls] if isinstance(frg_names_downstream[cls], list) else [frg_names_downstream[cls]]
+        upstream_parts = frg_names_upstream[cls] if isinstance(frg_names_upstream[cls], list) else [frg_names_upstream[cls]]
 
-    #frgs_fasta = list(frg_names_upstream.values()) + list(frg_names_downstream.values())
+        for up_file, down_file in zip(upstream_parts, downstream_parts):
+            frgs_fasta_both.append(up_file)
+            frgs_fasta_both.append(down_file)
+            frgs_class_mapping.append((cls, 'upstream'))
+            frgs_class_mapping.append((cls, 'downstream'))
+
     print("Assembling TIR boundaries...", end="")
     with Pool(processes=args.cpu) as pool:
         aln = pool.map(dt.cap3assembly, frgs_fasta_both, chunksize=1)
 
     print(" done")
-    aln_upstream = aln[::2]
-    aln_downstream = aln[1::2]
 
+    # Reconstruct class-based mapping from flat results
+    # Now aln contains alternating upstream/downstream results
+    # We need to group them by class, and if split, collect multiple files per class
     ctg_upstream = {}
     ctg_downstream = {}
-    print("Parsing assemblies")
-    for cls, x, y in zip(frg_names_downstream, aln_upstream, aln_downstream):
+
+    aln_idx = 0
+    for cls in frg_names_downstream:
+        downstream_parts = frg_names_downstream[cls] if isinstance(frg_names_downstream[cls], list) else [frg_names_downstream[cls]]
+        upstream_parts = frg_names_upstream[cls] if isinstance(frg_names_upstream[cls], list) else [frg_names_upstream[cls]]
+
+        # Collect all aln files for this class
+        aln_upstream_parts = []
+        aln_downstream_parts = []
+        upstream_fasta_parts = []
+        downstream_fasta_parts = []
+
+        for up_file, down_file in zip(upstream_parts, downstream_parts):
+            aln_upstream_parts.append(aln[aln_idx])
+            aln_idx += 1
+            aln_downstream_parts.append(aln[aln_idx])
+            aln_idx += 1
+            upstream_fasta_parts.append(up_file)
+            downstream_fasta_parts.append(down_file)
+
         print("Parsing assemblies for", cls, "...", end="")
-        ctg_upstream[cls] = dt.parse_cap3_aln(x, frg_names_upstream[cls], ncpus=args.cpu)
-        ctg_downstream[cls] = dt.parse_cap3_aln(y, frg_names_downstream[cls], ncpus=args.cpu)
+        # Pass lists to parse_cap3_aln (it handles both single files and lists)
+        ctg_upstream[cls] = dt.parse_cap3_aln(aln_upstream_parts, upstream_fasta_parts, ncpus=args.cpu)
+        ctg_downstream[cls] = dt.parse_cap3_aln(aln_downstream_parts, downstream_fasta_parts, ncpus=args.cpu)
         print("done")
 
     for cls in ctg_upstream:
