@@ -277,12 +277,21 @@ def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
     :param length: length of fragment
     :param jitter: random jitter size - make step size random withing jitter limits
     :return: dictionary with fragments
+
+    Note: Jitter is generated deterministically per sequence ID to ensure
+    upstream and downstream fragments get the same offsets for matching.
     """
     fragments_dict = {}
     for seq_id, seq in fasta_dict.items():
+        # Use sequence ID to seed jitter generation for this specific sequence
+        # This ensures consistent jitter offsets when the same sequence is processed
+        # again (e.g., upstream vs downstream with different random state)
+        seq_hash = hash(seq_id) % (2**31)
+        local_rng = random.Random(seq_hash)
+
         for i in range(0, len(seq), step):
             if i > 0:
-                ii = i + random.randint(-jitter, jitter)
+                ii = i + local_rng.randint(-jitter, jitter)
             else:
                 ii = i
             id = F'{seq_id}_{ii}_{ii + length}'
