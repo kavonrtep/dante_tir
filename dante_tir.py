@@ -133,44 +133,56 @@ def main():
     dt.save_fasta_dict_to_file(downstream_seq, F'{args.working_dir}/downstream_seq.fasta')
     dt.save_fasta_dict_to_file(upstream_seq, F'{args.working_dir}/upstream_seq_rc.fasta')
 
-    # make fragments of upstream and downstream sequences and save to file
-    frg_names_downstream, frg_names_upstream = dt.make_fragment_files(
-        args.working_dir, downstream_seq, upstream_seq
-        )
-
-    # assembly fragments into contigs
-    # Handle optional splitting of large classes
+    # Split original sequences BEFORE fragmentation (if needed)
     if args.max_class_size:
         print(f"Splitting large classes (threshold: {args.max_class_size} sequences)...", end="")
-        # Split upstream and downstream files while keeping them paired
-        split_upstream = {}
-        split_downstream = {}
-        for cls in frg_names_upstream:
-            up_parts, down_parts = dt.split_fasta_coordinated(
-                frg_names_upstream[cls],
-                frg_names_downstream[cls],
-                args.max_class_size
-            )
-            split_upstream[cls] = up_parts
-            split_downstream[cls] = down_parts
-        frg_names_upstream = split_upstream
-        frg_names_downstream = split_downstream
+        split_upstream, split_downstream, split_mapping = dt.split_sequences_by_class(
+            upstream_seq, downstream_seq, args.max_class_size
+        )
         print(" done")
+    else:
+        # No splitting: wrap in part structure for uniform processing
+        split_upstream = {cls: {1: upstream_seq[cls]} for cls in upstream_seq}
+        split_downstream = {cls: {1: downstream_seq[cls]} for cls in downstream_seq}
+        split_mapping = {cls: [1] for cls in upstream_seq}
+
+    # Fragment each part separately and save to files
+    frg_names_upstream = {}
+    frg_names_downstream = {}
+
+    for cls in split_upstream:
+        frg_names_upstream[cls] = {}
+        frg_names_downstream[cls] = {}
+
+        for part_num in split_mapping[cls]:
+            # Fragment this part
+            up_frags = dt.dict_fasta_to_dict_fragments(split_upstream[cls][part_num])
+            down_frags = dt.dict_fasta_to_dict_fragments(split_downstream[cls][part_num])
+
+            # Save fragmented parts
+            class_name = cls.replace('/', '_').replace('|', '_')
+            up_file = f'{args.working_dir}/{class_name}_upstream.part_{part_num:03d}.fasta'
+            down_file = f'{args.working_dir}/{class_name}_downstream.part_{part_num:03d}.fasta'
+
+            dt.save_fasta_dict_to_file(up_frags, up_file)
+            dt.save_fasta_dict_to_file(down_frags, down_file)
+
+            frg_names_upstream[cls][part_num] = up_file
+            frg_names_downstream[cls][part_num] = down_file
 
     # Build flat lists of files for parallel processing, tracking class/part mapping
     frgs_fasta_both = []
-    frgs_class_mapping = []  # Track which class each file pair belongs to
-    # file are converted to list to be able to use zip function
-    # pass list to map function
-    for cls in frg_names_downstream:
-        downstream_parts = frg_names_downstream[cls] if isinstance(frg_names_downstream[cls], list) else [frg_names_downstream[cls]]
-        upstream_parts = frg_names_upstream[cls] if isinstance(frg_names_upstream[cls], list) else [frg_names_upstream[cls]]
+    frgs_class_mapping = []  # Track which class and part each file pair belongs to
 
-        for up_file, down_file in zip(upstream_parts, downstream_parts):
+    for cls in frg_names_downstream:
+        for part_num in frg_names_downstream[cls]:
+            up_file = frg_names_upstream[cls][part_num]
+            down_file = frg_names_downstream[cls][part_num]
+
             frgs_fasta_both.append(up_file)
             frgs_fasta_both.append(down_file)
-            frgs_class_mapping.append((cls, 'upstream'))
-            frgs_class_mapping.append((cls, 'downstream'))
+            frgs_class_mapping.append((cls, part_num, 'upstream'))
+            frgs_class_mapping.append((cls, part_num, 'downstream'))
 
     print("Assembling TIR boundaries...", end="")
     with Pool(processes=args.cpu) as pool:

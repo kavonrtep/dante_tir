@@ -277,36 +277,22 @@ def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
     :param length: length of fragment
     :param jitter: random jitter size - make step size random withing jitter limits
     :return: dictionary with fragments
-
-    Note: Jitter is generated deterministically per sequence ID to ensure
-    upstream and downstream fragments get the same offsets for matching.
-    Jitter is safely constrained to keep fragment offsets valid.
     """
     fragments_dict = {}
     for seq_id, seq in fasta_dict.items():
-        # Use sequence ID to seed jitter generation for this specific sequence
-        # This ensures consistent jitter offsets when the same sequence is processed
-        # again (e.g., upstream vs downstream with different random state)
-        seq_hash = hash(seq_id) % (2**31)
-        local_rng = random.Random(seq_hash)
         seq_len = len(seq)
 
         for i in range(0, seq_len, step):
             if i > 0:
-                # Constrain jitter range to keep offset within bounds
-                # Maximum jitter that keeps start position non-negative: jitter
-                # Maximum jitter that keeps end position within sequence: seq_len - i - length
-                max_jitter_forward = max(0, seq_len - i - length)
-                max_jitter_back = i
-                max_jitter_allowed = min(jitter, max_jitter_forward, max_jitter_back)
-
-                jitter_offset = local_rng.randint(-max_jitter_allowed, max_jitter_allowed)
-                ii = i + jitter_offset
+                ii = i + random.randint(-jitter, jitter)
             else:
-                ii = 0
+                ii = i
 
-            # Only create fragment if it's fully within bounds
-            if ii >= 0 and ii + length <= seq_len:
+            # Ensure offset is within valid bounds
+            ii = max(0, min(ii, seq_len - length))
+
+            # Only create fragment if it has content
+            if ii + length <= seq_len:
                 id = F'{seq_id}_{ii}_{ii + length}'
                 fragments_dict[id] = seq[ii:ii + length]
     return fragments_dict
@@ -341,70 +327,6 @@ def make_fragment_files(output_dir: str,
         save_fasta_dict_to_file(fragments, frg_names_downstream[cls])
     return frg_names_downstream, frg_names_upstream
 
-
-
-def split_fasta_coordinated(upstream_file: str, downstream_file: str,
-                             threshold: int) -> Tuple[List[str], List[str]]:
-    """
-    Split upstream and downstream FASTA files into parts with coordinated sequence boundaries.
-
-    This ensures that both upstream and downstream files are split at the same sequence IDs,
-    so they remain paired throughout the pipeline.
-
-    :param upstream_file: Path to upstream FASTA file
-    :param downstream_file: Path to downstream FASTA file
-    :param threshold: Maximum number of sequences per part
-    :return: Tuple of (list of upstream part files, list of downstream part files)
-    """
-    # Read both files and extract sequence IDs
-    upstream_data = fasta_to_dict(upstream_file)
-    downstream_data = fasta_to_dict(downstream_file)
-
-    # Verify same sequences in both files
-    upstream_ids = set(upstream_data.keys())
-    downstream_ids = set(downstream_data.keys())
-
-    if upstream_ids != downstream_ids:
-        raise ValueError(
-            f"Sequence IDs mismatch between upstream and downstream files. "
-            f"Upstream only: {len(upstream_ids - downstream_ids)}, "
-            f"Downstream only: {len(downstream_ids - upstream_ids)}"
-        )
-
-    # If number of sequences is below threshold, no splitting needed
-    if len(upstream_ids) <= threshold:
-        return [upstream_file], [downstream_file]
-
-    # Sort sequence IDs for consistent ordering
-    seq_ids = sorted(upstream_ids)
-
-    # Create parts
-    upstream_parts = []
-    downstream_parts = []
-    part_num = 1
-
-    for i in range(0, len(seq_ids), threshold):
-        part_seq_ids = seq_ids[i:i + threshold]
-
-        # Create part-specific filenames
-        base_upstream = upstream_file.rsplit('.', 1)[0] if '.' in upstream_file else upstream_file
-        base_downstream = downstream_file.rsplit('.', 1)[0] if '.' in downstream_file else downstream_file
-
-        upstream_part_file = F'{base_upstream}.part_{part_num:03d}.fasta'
-        downstream_part_file = F'{base_downstream}.part_{part_num:03d}.fasta'
-
-        # Extract and save sequences for this part
-        upstream_part_dict = {seq_id: upstream_data[seq_id] for seq_id in part_seq_ids}
-        downstream_part_dict = {seq_id: downstream_data[seq_id] for seq_id in part_seq_ids}
-
-        save_fasta_dict_to_file(upstream_part_dict, upstream_part_file)
-        save_fasta_dict_to_file(downstream_part_dict, downstream_part_file)
-
-        upstream_parts.append(upstream_part_file)
-        downstream_parts.append(downstream_part_file)
-        part_num += 1
-
-    return upstream_parts, downstream_parts
 
 
 def cap3assembly(fasta_file):
@@ -859,6 +781,63 @@ def extract_flanking_regions(genome: Dict[str, str],
             downstream_seq[cls][ID] = reverse_complement(downstream)
 
     return downstream_seq, upstream_seq, coords
+
+def split_sequences_by_class(upstream_seq: Dict[str, Dict[int, str]],
+                             downstream_seq: Dict[str, Dict[int, str]],
+                             threshold: int) -> Tuple[
+    Dict[str, Dict[int, Dict[int, str]]],
+    Dict[str, Dict[int, Dict[int, str]]],
+    Dict[str, List[int]]
+]:
+    """
+    Split upstream and downstream sequences into parts while maintaining pairing.
+
+    For each class, if the number of sequences exceeds threshold, split into
+    multiple parts. Each part contains paired upstream/downstream sequences from
+    the SAME original IDs, ensuring no ID mismatches.
+
+    :param upstream_seq: Dict[class][ID] → sequence
+    :param downstream_seq: Dict[class][ID] → sequence
+    :param threshold: Maximum sequences per part (max_class_size)
+    :return: Tuple of (split_upstream, split_downstream, split_mapping)
+        - split_upstream: Dict[class][part_num][ID] → sequence
+        - split_downstream: Dict[class][part_num][ID] → sequence
+        - split_mapping: Dict[class] → list of part_nums
+    """
+    split_upstream = {}
+    split_downstream = {}
+    split_mapping = {}
+
+    for cls in upstream_seq:
+        # Get sorted IDs for consistent ordering
+        upstream_ids = sorted(upstream_seq[cls].keys())
+
+        if len(upstream_ids) <= threshold:
+            # No split needed - wrap in part structure for uniform processing
+            split_upstream[cls] = {1: upstream_seq[cls].copy()}
+            split_downstream[cls] = {1: downstream_seq[cls].copy()}
+            split_mapping[cls] = [1]
+        else:
+            # Split into multiple parts
+            split_upstream[cls] = {}
+            split_downstream[cls] = {}
+            split_mapping[cls] = []
+            part_num = 1
+
+            for i in range(0, len(upstream_ids), threshold):
+                part_ids = upstream_ids[i:i + threshold]
+
+                # Create part with paired sequences
+                split_upstream[cls][part_num] = {
+                    seq_id: upstream_seq[cls][seq_id] for seq_id in part_ids
+                }
+                split_downstream[cls][part_num] = {
+                    seq_id: downstream_seq[cls][seq_id] for seq_id in part_ids
+                }
+                split_mapping[cls].append(part_num)
+                part_num += 1
+
+    return split_upstream, split_downstream, split_mapping
 
 def save_coords_to_file(coords: Dict[str, Dict[str, List[int]]], coords_file: str):
     """
