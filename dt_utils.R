@@ -128,13 +128,14 @@ analyze_consensus_matrix <- function(CM, min_coverage = 10, base_pseudocount = 1
 
 
 
-find_switch_point <- function (aln_info, plotit = FALSE) {
+find_switch_point <- function (aln_info, plotit = FALSE, mcmc_seed = 42) {
   invisible(capture.output(
   switch_info <- beast(aln_info$InformationContent, season = 'none',
                        tcp.minmax = c(1,2),
                        torder.minmax = c(0,0),
                        tseg.leftmargin = 10,
                        tseg.rightmargin = 10,
+                       mcmc.seed = mcmc_seed,
                        quiet         = TRUE)
   ))
   cp <- switch_info$trend$pos_cp
@@ -409,13 +410,14 @@ get_coverage_from_blast <- function(bl) {
   cov_list
 }
 
-find_switch_point_from_blast_coverage <- function(cvrg) {
+find_switch_point_from_blast_coverage <- function(cvrg, mcmc_seed = 42) {
   invisible(capture.output(
   switch_info <- beast(cvrg, season = 'none',
                        tcp.minmax = c(1, 2),
                        torder.minmax = c(0, 0),
                        tseg.leftmargin = 500,
                        tseg.rightmargin = 300,
+                       mcmc.seed = mcmc_seed,
                        quiet = TRUE)
   ))
   cp <- switch_info$trend$pos_cp[1]
@@ -854,7 +856,7 @@ run_blast_tir_analysis <- function(
   return(list (blast_df = blast_df, blast_cov = blast_cov, cp_vals = cp_vals))
 }
 
-process_region_files <- function(file_list, side) {
+process_region_files <- function(file_list, side, mcmc_seed = 42) {
   info_list <- list()
   CM_list <- list()
   ctg_list <- list()
@@ -874,7 +876,7 @@ process_region_files <- function(file_list, side) {
       next
     }
     aln_info <- analyze_consensus_matrix(CM)
-    cp <- find_switch_point(aln_info)
+    cp <- find_switch_point(aln_info, mcmc_seed = mcmc_seed)
     classification <- gsub(pattern, "", basename(f))
     mean_coverage <- mean(colSums(CM))
     # (dpos is calculated in your original code, but it is not used later)
@@ -1068,7 +1070,7 @@ blast_helper <- function(query_up, query_down, db_up, db_down,
 }
 
 
-round1 <- function(contig_dir, tir_flank_file) {
+round1 <- function(contig_dir, tir_flank_file, mcmc_seed = 42) {
   message("\n ---- Identification of elements - Round 1 ----")
   # Read TIR flank coordinates
   tir_flank_coordinates <- read.table(tir_flank_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
@@ -1087,7 +1089,7 @@ round1 <- function(contig_dir, tir_flank_file) {
   }
 
   message("Processing upstream regions")
-  upstream_results <- process_region_files(upstream_contigs, "upstream")
+  upstream_results <- process_region_files(upstream_contigs, "upstream", mcmc_seed = mcmc_seed)
   # Ensure process_region_files returned non-empty 'info'
   if (length(upstream_results$info) == 0) {
     message("No upstream information returned from process_region_files.")
@@ -1098,7 +1100,7 @@ round1 <- function(contig_dir, tir_flank_file) {
   ctg_list_upstream <- upstream_results$ctg_list
 
   message("Processing downstream regions")
-  downstream_results <- process_region_files(downstream_contigs, "downstream")
+  downstream_results <- process_region_files(downstream_contigs, "downstream", mcmc_seed = mcmc_seed)
   if (length(downstream_results$info) == 0) {
     message("No downstream information returned from process_region_files.")
     downstream_info <- data.frame()

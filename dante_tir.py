@@ -11,11 +11,21 @@ import shutil
 import subprocess
 from itertools import chain
 import random
+import hashlib
 from version import __version__
 from time import time
 
 import dt_utils as dt
 from multiprocessing import Pool
+
+def compute_file_checksum(filepath):
+    """Compute MD5 checksum of a file."""
+    md5_hash = hashlib.md5()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            md5_hash.update(chunk)
+    return md5_hash.hexdigest()
+
 
 def main():
     # Parse command line arguments
@@ -50,6 +60,10 @@ def main():
     parser.add_argument(
         '--debug', action='store_true',
         help='Debug mode', default=False
+    )
+    parser.add_argument(
+        '--seed', help='Random seed for reproducibility (used in R scripts)',
+        type=int, default=42
     )
 
     print("--------------------------------------------------------")
@@ -164,6 +178,27 @@ def main():
 
     print(" done")
 
+    # Log checksums of input fragment files for reproducibility verification
+    checksum_log = F'{args.working_dir}/assembly_input_checksums.txt'
+    with open(checksum_log, 'w') as f:
+        f.write("# Checksums of input fragment files for CAP3 assembly\n")
+        f.write("# Use to verify reproducibility across runs\n")
+        for idx, fasta_file in enumerate(frgs_fasta_both):
+            checksum = compute_file_checksum(fasta_file)
+            mapping_info = frgs_class_mapping[idx] if idx < len(frgs_class_mapping) else ("unknown", "unknown")
+            f.write(f"{fasta_file}\t{checksum}\t{mapping_info[0]}\t{mapping_info[1]}\n")
+
+    # Log checksums of CAP3 output files
+    cap3_checksum_log = F'{args.working_dir}/assembly_output_checksums.txt'
+    with open(cap3_checksum_log, 'w') as f:
+        f.write("# Checksums of CAP3 assembly output files\n")
+        f.write("# Use to verify reproducibility across runs\n")
+        for idx, aln_file in enumerate(aln):
+            if aln_file and os.path.exists(aln_file):
+                checksum = compute_file_checksum(aln_file)
+                mapping_info = frgs_class_mapping[idx] if idx < len(frgs_class_mapping) else ("unknown", "unknown")
+                f.write(f"{aln_file}\t{checksum}\t{mapping_info[0]}\t{mapping_info[1]}\n")
+
     # Reconstruct class-based mapping from flat results
     # Now aln contains alternating upstream/downstream results
     # We need to group them by class, and if split, collect multiple files per class
@@ -213,7 +248,7 @@ def main():
     # find TIRs in contigs using R script
     cmd = (F'{script_dir}/detect_tirs.R --contig_dir {args.working_dir} --output '
            F'{args.working_dir} --threads {args.cpu} '
-           F'--genome {args.fasta}')
+           F'--genome {args.fasta} --seed {args.seed}')
     subprocess.check_call(cmd, shell=True)
 
     # copy output files to output directory

@@ -9,7 +9,9 @@ options_list <- list(
   make_option(c("-t", "--threads"), action = "store", type = "integer",
               help = "number of threads to use", default = 1),
   make_option(c("-g", "--genome"), action = "store", type = "character",
-              help = "genome fasta file", default = NA)
+              help = "genome fasta file", default = NA),
+  make_option(c("-s", "--seed"), action = "store", type = "integer",
+              help = "random seed for reproducibility", default = 42)
 )
 
 parser <- OptionParser(option_list = options_list)
@@ -29,6 +31,8 @@ script_dir <- dirname(script_name)
 # get functions
 source(file.path(script_dir, "dt_utils.R"))
 
+# Set random seed for reproducibility
+set.seed(opt$seed)
 
 # Define the path to the TIR flank coordinates file
 tir_flank_file <- file.path(opt$contig_dir, "tir_flank_coords.txt")
@@ -41,7 +45,7 @@ tryCatch({
   ########################################################################################
 
   # Call the round1 function
-  round1_results <- round1(opt$contig_dir, tir_flank_file)
+  round1_results <- round1(opt$contig_dir, tir_flank_file, mcmc_seed = opt$seed)
 
   # Extract outputs for use in later rounds
   gr1 <- round1_results$gr1
