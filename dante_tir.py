@@ -178,26 +178,27 @@ def main():
 
     print(" done")
 
-    # Log checksums of input fragment files for reproducibility verification
-    checksum_log = F'{args.working_dir}/assembly_input_checksums.txt'
-    with open(checksum_log, 'w') as f:
-        f.write("# Checksums of input fragment files for CAP3 assembly\n")
-        f.write("# Use to verify reproducibility across runs\n")
-        for idx, fasta_file in enumerate(frgs_fasta_both):
-            checksum = compute_file_checksum(fasta_file)
-            mapping_info = frgs_class_mapping[idx] if idx < len(frgs_class_mapping) else ("unknown", "unknown")
-            f.write(f"{fasta_file}\t{checksum}\t{mapping_info[0]}\t{mapping_info[1]}\n")
-
-    # Log checksums of CAP3 output files
-    cap3_checksum_log = F'{args.working_dir}/assembly_output_checksums.txt'
-    with open(cap3_checksum_log, 'w') as f:
-        f.write("# Checksums of CAP3 assembly output files\n")
-        f.write("# Use to verify reproducibility across runs\n")
-        for idx, aln_file in enumerate(aln):
-            if aln_file and os.path.exists(aln_file):
-                checksum = compute_file_checksum(aln_file)
+    # Log checksums of input/output fragment files for reproducibility verification (debug only)
+    if args.debug:
+        checksum_log = F'{args.working_dir}/assembly_input_checksums.txt'
+        with open(checksum_log, 'w') as f:
+            f.write("# Checksums of input fragment files for CAP3 assembly\n")
+            f.write("# Use to verify reproducibility across runs\n")
+            for idx, fasta_file in enumerate(frgs_fasta_both):
+                checksum = compute_file_checksum(fasta_file)
                 mapping_info = frgs_class_mapping[idx] if idx < len(frgs_class_mapping) else ("unknown", "unknown")
-                f.write(f"{aln_file}\t{checksum}\t{mapping_info[0]}\t{mapping_info[1]}\n")
+                f.write(f"{fasta_file}\t{checksum}\t{mapping_info[0]}\t{mapping_info[1]}\n")
+
+        # Log checksums of CAP3 output files
+        cap3_checksum_log = F'{args.working_dir}/assembly_output_checksums.txt'
+        with open(cap3_checksum_log, 'w') as f:
+            f.write("# Checksums of CAP3 assembly output files\n")
+            f.write("# Use to verify reproducibility across runs\n")
+            for idx, aln_file in enumerate(aln):
+                if aln_file and os.path.exists(aln_file):
+                    checksum = compute_file_checksum(aln_file)
+                    mapping_info = frgs_class_mapping[idx] if idx < len(frgs_class_mapping) else ("unknown", "unknown")
+                    f.write(f"{aln_file}\t{checksum}\t{mapping_info[0]}\t{mapping_info[1]}\n")
 
     # Reconstruct class-based mapping from flat results
     # Now aln contains alternating upstream/downstream results
