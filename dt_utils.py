@@ -280,6 +280,7 @@ def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
 
     Note: Jitter is generated deterministically per sequence ID to ensure
     upstream and downstream fragments get the same offsets for matching.
+    Jitter is safely constrained to keep fragment offsets valid.
     """
     fragments_dict = {}
     for seq_id, seq in fasta_dict.items():
@@ -288,14 +289,26 @@ def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
         # again (e.g., upstream vs downstream with different random state)
         seq_hash = hash(seq_id) % (2**31)
         local_rng = random.Random(seq_hash)
+        seq_len = len(seq)
 
-        for i in range(0, len(seq), step):
+        for i in range(0, seq_len, step):
             if i > 0:
-                ii = i + local_rng.randint(-jitter, jitter)
+                # Constrain jitter range to keep offset within bounds
+                # Maximum jitter that keeps start position non-negative: jitter
+                # Maximum jitter that keeps end position within sequence: seq_len - i - length
+                max_jitter_forward = max(0, seq_len - i - length)
+                max_jitter_back = i
+                max_jitter_allowed = min(jitter, max_jitter_forward, max_jitter_back)
+
+                jitter_offset = local_rng.randint(-max_jitter_allowed, max_jitter_allowed)
+                ii = i + jitter_offset
             else:
-                ii = i
-            id = F'{seq_id}_{ii}_{ii + length}'
-            fragments_dict[id] = seq[ii:ii + length]
+                ii = 0
+
+            # Only create fragment if it's fully within bounds
+            if ii >= 0 and ii + length <= seq_len:
+                id = F'{seq_id}_{ii}_{ii + length}'
+                fragments_dict[id] = seq[ii:ii + length]
     return fragments_dict
 
 
