@@ -65,6 +65,10 @@ def main():
         '--seed', help='Random seed for reproducibility (used in R scripts)',
         type=int, default=42
     )
+    parser.add_argument(
+        '--n_beast_iter', help='Number of BEAST iterations with different random seeds for TIR detection (default=1, max=10)',
+        type=int, default=1
+    )
 
     print("--------------------------------------------------------")
     print("")
@@ -78,6 +82,10 @@ def main():
 
 
     args = parser.parse_args()
+
+    # Validate n_beast_iter parameter
+    if args.n_beast_iter < 1 or args.n_beast_iter > 10:
+        parser.error("--n_beast_iter must be between 1 and 10 (default=1)")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     # set random seed for reproducibility
@@ -266,7 +274,8 @@ def main():
     # find TIRs in contigs using R script
     cmd = (F'{script_dir}/detect_tirs.R --contig_dir {args.working_dir} --output '
            F'{args.working_dir} --threads {args.cpu} '
-           F'--genome {args.fasta} --seed {args.seed}')
+           F'--genome {args.fasta} --seed {args.seed} '
+           F'--n_beast_iter {args.n_beast_iter}')
     subprocess.check_call(cmd, shell=True)
 
     # copy output files to output directory

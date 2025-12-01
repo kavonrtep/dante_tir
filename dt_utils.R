@@ -128,43 +128,55 @@ analyze_consensus_matrix <- function(CM, min_coverage = 10, base_pseudocount = 1
 
 
 
-find_switch_point <- function (aln_info, plotit = FALSE, mcmc_seed = 42) {
-  invisible(capture.output(
-  switch_info <- beast(aln_info$InformationContent, season = 'none',
-                       tcp.minmax = c(1,2),
-                       torder.minmax = c(0,0),
-                       tseg.leftmargin = 10,
-                       tseg.rightmargin = 10,
-                       mcmc.seed = mcmc_seed,
-                       quiet         = TRUE)
-  ))
-  cp <- switch_info$trend$pos_cp
-  cpPr <- switch_info$trend$pos_cpPr
-  abrupt_change <- switch_info$trend$pos_cpAbruptChange
-  # condition to pass switch point detection
-  # the strongest change point is the first one
-  # position of switch point must be between 11-90 nucleotide of the alignment
-  # abrubt change must be greater than 0.5
-  # posterior probability of change point must be greater than 0.5
-  # proportion of unambiguous nucleotides must be greater than 0.7
-  c1 <- which.min(cp) == 1
-  if (length(c1) == 0){
-    return(NA)
+find_switch_point <- function (aln_info, plotit = FALSE, mcmc_seed = 42, n_beast_iter = 1) {
+  valid_cps <- c()
+
+  for (iter in 1:n_beast_iter) {
+    # Generate a unique seed for each iteration
+    current_seed <- mcmc_seed + iter - 1
+
+    invisible(capture.output(
+    switch_info <- beast(aln_info$InformationContent, season = 'none',
+                         tcp.minmax = c(1,2),
+                         torder.minmax = c(0,0),
+                         tseg.leftmargin = 10,
+                         tseg.rightmargin = 10,
+                         mcmc.seed = current_seed,
+                         quiet         = TRUE)
+    ))
+    cp <- switch_info$trend$pos_cp
+    cpPr <- switch_info$trend$pos_cpPr
+    abrupt_change <- switch_info$trend$pos_cpAbruptChange
+    # condition to pass switch point detection
+    # the strongest change point is the first one
+    # position of switch point must be between 11-90 nucleotide of the alignment
+    # abrubt change must be greater than 0.5
+    # posterior probability of change point must be greater than 0.5
+    # proportion of unambiguous nucleotides must be greater than 0.7
+    c1 <- which.min(cp) == 1
+    if (length(c1) == 0){
+      next
+    }
+    c2 <- cp[1] > 12 && cp[1] < 120
+    c3 <- abrupt_change[1] > 0.2
+    c4 <- cpPr[1] > 0.3
+    if (c1 & c2 & c3 & c4) {
+      Ncount <- sum(unlist(strsplit(substr(aln_info$cons,cp[1] - 10, cp[1]-1),""))=="N")
+      if (Ncount < 6){
+        next
+      }
+      if (plotit){
+        plot(switch_info)
+      }
+      valid_cps <- c(valid_cps, cp[1])
+    }
   }
-  c2 <- cp[1] > 12 && cp[1] < 120
-  c3 <- abrupt_change[1] > 0.2
-  c4 <- cpPr[1] > 0.3
-  if (c1 & c2 & c3 & c4) {
-    Ncount <- sum(unlist(strsplit(substr(aln_info$cons,cp[1] - 10, cp[1]-1),""))=="N")
-    if (Ncount < 6){
-      return(NA)
-    }
-    if (plotit){
-      plot(switch_info)
-    }
-    return(cp[1])
-  } else {
+
+  if (length(valid_cps) == 0) {
     return(NA)
+  } else {
+    # Return the most frequent switch point, or the first one if all are unique
+    return(as.numeric(names(sort(table(valid_cps), decreasing = TRUE)[1])))
   }
 }
 
@@ -410,39 +422,51 @@ get_coverage_from_blast <- function(bl) {
   cov_list
 }
 
-find_switch_point_from_blast_coverage <- function(cvrg, mcmc_seed = 42) {
-  invisible(capture.output(
-  switch_info <- beast(cvrg, season = 'none',
-                       tcp.minmax = c(1, 2),
-                       torder.minmax = c(0, 0),
-                       tseg.leftmargin = 500,
-                       tseg.rightmargin = 300,
-                       mcmc.seed = mcmc_seed,
-                       quiet = TRUE)
-  ))
-  cp <- switch_info$trend$pos_cp[1]
-  cp_neg <- switch_info$trend$pos_cpNeg
-  if (!is.null(cp_neg)) {
-    if (any(cp_neg > cp)) {
-      return(NA)
+find_switch_point_from_blast_coverage <- function(cvrg, mcmc_seed = 42, n_beast_iter = 1) {
+  valid_cps <- c()
+
+  for (iter in 1:n_beast_iter) {
+    # Generate a unique seed for each iteration
+    current_seed <- mcmc_seed + iter - 1
+
+    invisible(capture.output(
+    switch_info <- beast(cvrg, season = 'none',
+                         tcp.minmax = c(1, 2),
+                         torder.minmax = c(0, 0),
+                         tseg.leftmargin = 500,
+                         tseg.rightmargin = 300,
+                         mcmc.seed = current_seed,
+                         quiet = TRUE)
+    ))
+    cp <- switch_info$trend$pos_cp[1]
+    cp_neg <- switch_info$trend$pos_cpNeg
+    if (!is.null(cp_neg)) {
+      if (any(cp_neg > cp)) {
+        next
+      }
+    }
+    if (is.null(cp) | is.na(cp)) {
+      next
+    }
+    cpPr <- switch_info$trend$pos_cpPr[1]
+    abrupt_change <- switch_info$trend$pos_cpAbruptChange[1]
+    # coverage before change point
+    cvrg0 <- mean(cvrg[1:cp[1]])
+    cvrg1 <- mean(cvrg[(cp[1] + 1):length(cvrg)])
+
+    c1 <- cpPr > 0.5
+    c4 <- cvrg1 > 9
+    c3 <- (cvrg1 + 1) / (cvrg0 + 1) > 5
+    if (c1 & c3 & c4) {
+      valid_cps <- c(valid_cps, cp)
     }
   }
-  if (is.null(cp) | is.na(cp)) {
-    return(NA)
-  }
-  cpPr <- switch_info$trend$pos_cpPr[1]
-  abrupt_change <- switch_info$trend$pos_cpAbruptChange[1]
-  # coverage before change point
-  cvrg0 <- mean(cvrg[1:cp[1]])
-  cvrg1 <- mean(cvrg[(cp[1] + 1):length(cvrg)])
 
-  c1 <- cpPr > 0.5
-  c4 <- cvrg1 > 9
-  c3 <- (cvrg1 + 1) / (cvrg0 + 1) > 5
-  if (c1 & c3 & c4) {
-    return(cp)
-  } else {
+  if (length(valid_cps) == 0) {
     return(NA)
+  } else {
+    # Return the most frequent switch point
+    return(as.numeric(names(sort(table(valid_cps), decreasing = TRUE)[1])))
   }
 }
 
@@ -856,7 +880,7 @@ run_blast_tir_analysis <- function(
   return(list (blast_df = blast_df, blast_cov = blast_cov, cp_vals = cp_vals))
 }
 
-process_region_files <- function(file_list, side, mcmc_seed = 42) {
+process_region_files <- function(file_list, side, mcmc_seed = 42, n_beast_iter = 1) {
   info_list <- list()
   CM_list <- list()
   ctg_list <- list()
@@ -876,7 +900,7 @@ process_region_files <- function(file_list, side, mcmc_seed = 42) {
       next
     }
     aln_info <- analyze_consensus_matrix(CM)
-    cp <- find_switch_point(aln_info, mcmc_seed = mcmc_seed)
+    cp <- find_switch_point(aln_info, mcmc_seed = mcmc_seed, n_beast_iter = n_beast_iter)
     classification <- gsub(pattern, "", basename(f))
     mean_coverage <- mean(colSums(CM))
     # (dpos is calculated in your original code, but it is not used later)
@@ -1070,7 +1094,7 @@ blast_helper <- function(query_up, query_down, db_up, db_down,
 }
 
 
-round1 <- function(contig_dir, tir_flank_file, mcmc_seed = 42) {
+round1 <- function(contig_dir, tir_flank_file, mcmc_seed = 42, n_beast_iter = 1) {
   message("\n ---- Identification of elements - Round 1 ----")
   # Read TIR flank coordinates
   tir_flank_coordinates <- read.table(tir_flank_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
@@ -1089,7 +1113,8 @@ round1 <- function(contig_dir, tir_flank_file, mcmc_seed = 42) {
   }
 
   message("Processing upstream regions")
-  upstream_results <- process_region_files(upstream_contigs, "upstream", mcmc_seed = mcmc_seed)
+  upstream_results <- process_region_files(upstream_contigs, "upstream", mcmc_seed = mcmc_seed,
+                                           n_beast_iter = n_beast_iter)
   # Ensure process_region_files returned non-empty 'info'
   if (length(upstream_results$info) == 0) {
     message("No upstream information returned from process_region_files.")
@@ -1100,7 +1125,8 @@ round1 <- function(contig_dir, tir_flank_file, mcmc_seed = 42) {
   ctg_list_upstream <- upstream_results$ctg_list
 
   message("Processing downstream regions")
-  downstream_results <- process_region_files(downstream_contigs, "downstream", mcmc_seed = mcmc_seed)
+  downstream_results <- process_region_files(downstream_contigs, "downstream", mcmc_seed = mcmc_seed,
+                                             n_beast_iter = n_beast_iter)
   if (length(downstream_results$info) == 0) {
     message("No downstream information returned from process_region_files.")
     downstream_info <- data.frame()

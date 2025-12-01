@@ -11,11 +11,19 @@ options_list <- list(
   make_option(c("-g", "--genome"), action = "store", type = "character",
               help = "genome fasta file", default = NA),
   make_option(c("-s", "--seed"), action = "store", type = "integer",
-              help = "random seed for reproducibility", default = 42)
+              help = "random seed for reproducibility", default = 42),
+  make_option(c("-n", "--n_beast_iter"), action = "store", type = "integer",
+              help = "number of BEAST iterations with different random seeds (default=1, max=10)",
+              default = 1)
 )
 
 parser <- OptionParser(option_list = options_list)
 opt <- parse_args(parser, args = commandArgs(TRUE))
+
+# Validate n_beast_iter parameter
+if (opt$n_beast_iter < 1 || opt$n_beast_iter > 10) {
+  stop("--n_beast_iter must be between 1 and 10 (default=1)")
+}
 
 suppressPackageStartupMessages({
   library(Biostrings)
@@ -45,7 +53,8 @@ tryCatch({
   ########################################################################################
 
   # Call the round1 function
-  round1_results <- round1(opt$contig_dir, tir_flank_file, mcmc_seed = opt$seed)
+  round1_results <- round1(opt$contig_dir, tir_flank_file, mcmc_seed = opt$seed,
+                           n_beast_iter = opt$n_beast_iter)
 
   # Extract outputs for use in later rounds
   gr1 <- round1_results$gr1
