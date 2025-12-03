@@ -3,6 +3,7 @@ import math
 import random
 import subprocess
 import os
+import shutil
 import tempfile
 import re
 from typing import List, Dict, Tuple, Set
@@ -782,6 +783,77 @@ def extract_flanking_regions(genome: Dict[str, str],
 
     return downstream_seq, upstream_seq, coords
 
+def split_sequences_by_clustering(upstream_seq: Dict[str, Dict[int, str]],
+                                  downstream_seq: Dict[str, Dict[int, str]],
+                                  aa_sequence_groups: Dict[str, Dict[int, list]]) -> Tuple[
+    Dict[str, Dict[int, Dict[int, str]]],
+    Dict[str, Dict[int, Dict[int, str]]],
+    Dict[str, List[int]]
+]:
+    """
+    Split upstream and downstream sequences based on AA domain clustering groups.
+
+    Uses the clustering-based grouping from mmseqs2 to partition sequences.
+    Each group becomes a separate processing part, respecting cluster boundaries.
+
+    :param upstream_seq: Dict[class][ID] → sequence
+    :param downstream_seq: Dict[class][ID] → sequence
+    :param aa_sequence_groups: Dict[class][group_id] → [list of sequence_ids] from clustering
+    :return: Tuple of (split_upstream, split_downstream, split_mapping)
+        - split_upstream: Dict[class][part_num][ID] → sequence
+        - split_downstream: Dict[class][part_num][ID] → sequence
+        - split_mapping: Dict[class] → list of part_nums
+    """
+    split_upstream = {}
+    split_downstream = {}
+    split_mapping = {}
+
+    for cls in upstream_seq:
+        split_upstream[cls] = {}
+        split_downstream[cls] = {}
+        split_mapping[cls] = []
+
+        # Get clustering groups for this class if available
+        if cls in aa_sequence_groups and aa_sequence_groups[cls]:
+            # Use clustering-based groups
+            groups = aa_sequence_groups[cls]
+
+            # Sort group IDs to process in order
+            for group_id in sorted(groups.keys()):
+                group_member_ids = groups[group_id]
+
+                # Convert member IDs to integers for matching with upstream_seq keys
+                part_ids = []
+                for member_id in group_member_ids:
+                    # member_id might be string, need to convert
+                    try:
+                        seq_id = int(member_id)
+                        if seq_id in upstream_seq[cls]:
+                            part_ids.append(seq_id)
+                    except (ValueError, TypeError):
+                        # Skip if cannot convert
+                        continue
+
+                # Create part with paired sequences from this group
+                if part_ids:
+                    part_num = len(split_mapping[cls]) + 1
+                    split_upstream[cls][part_num] = {
+                        seq_id: upstream_seq[cls][seq_id] for seq_id in part_ids
+                    }
+                    split_downstream[cls][part_num] = {
+                        seq_id: downstream_seq[cls][seq_id] for seq_id in part_ids
+                    }
+                    split_mapping[cls].append(part_num)
+        else:
+            # Fallback: no clustering groups, treat entire class as one part
+            upstream_ids = sorted(upstream_seq[cls].keys())
+            split_upstream[cls][1] = upstream_seq[cls].copy()
+            split_downstream[cls][1] = downstream_seq[cls].copy()
+            split_mapping[cls] = [1]
+
+    return split_upstream, split_downstream, split_mapping
+
+
 def split_sequences_by_class(upstream_seq: Dict[str, Dict[int, str]],
                              downstream_seq: Dict[str, Dict[int, str]],
                              threshold: int) -> Tuple[
@@ -1101,6 +1173,286 @@ class Contig:
 
 
 class BreakIt(Exception): pass
+
+
+def clean_aa_sequence(aa_seq: str) -> str:
+    """
+    Remove non-standard characters from amino acid sequence.
+    Keeps only standard amino acids (A-Z).
+    :param aa_seq: amino acid sequence string
+    :return: cleaned amino acid sequence
+    """
+    # Keep only letters (standard amino acids)
+    cleaned = ''.join(c for c in aa_seq if c.isalpha())
+    return cleaned
+
+
+def extract_aa_sequences_from_dante(tir_domains: Dict[str, list]) -> Dict[str, Dict[int, str]]:
+    """
+    Extract amino acid sequences from DANTE GFF3 records.
+    The Region_Seq attribute contains the AA sequence of the domain.
+    :param tir_domains: dictionary of tir_domains from get_tir_records_from_dante
+    :return: nested dictionary with structure {classification: {id: aa_sequence}}
+    """
+    aa_sequences = {}
+
+    for cls in tir_domains:
+        aa_sequences[cls] = {}
+        for gff in tir_domains[cls]:
+            record_id = gff.attributes_dict['ID']
+            # Get Region_Seq from attributes
+            if 'Region_Seq' in gff.attributes_dict:
+                aa_seq = gff.attributes_dict['Region_Seq']
+                # Clean the sequence (remove non-standard characters)
+                cleaned_seq = clean_aa_sequence(aa_seq)
+                aa_sequences[cls][record_id] = cleaned_seq
+
+    return aa_sequences
+
+
+def save_aa_sequences_by_superfamily(aa_sequences: Dict[str, Dict[int, str]],
+                                     working_dir: str) -> Dict[str, str]:
+    """
+    Save amino acid sequences to FASTA files, one file per superfamily.
+    IDs match the format used in upstream/downstream_regions.fasta files.
+    :param aa_sequences: nested dictionary {classification: {id: aa_sequence}}
+    :param working_dir: working directory path
+    :return: dictionary mapping classification to AA FASTA file path
+    """
+    aa_fasta_files = {}
+
+    for cls in aa_sequences:
+        class_name = cls.replace('/', '_').replace('|', '_')
+        aa_fasta_file = F'{working_dir}/{class_name}_aa_sequences.fasta'
+
+        with open(aa_fasta_file, 'w') as f:
+            for record_id, aa_seq in aa_sequences[cls].items():
+                f.write(F'>{record_id}\n{aa_seq}\n')
+
+        aa_fasta_files[cls] = aa_fasta_file
+
+    return aa_fasta_files
+
+
+def cluster_aa_sequences_mmseqs2(aa_fasta_files: Dict[str, str],
+                                  working_dir: str,
+                                  num_threads: int = 1,
+                                  min_seq_id: float = 0.8,
+                                  cov_mode: int = 0,
+                                  coverage: float = 0.8,
+                                  sensitivity: float = 7.0,
+                                  e_value: float = 1e-3) -> Dict[str, str]:
+    """
+    Cluster amino acid sequences using mmseqs2 easy-cluster for each superfamily.
+    Each AA FASTA file is clustered independently with default settings.
+
+    :param aa_fasta_files: dictionary mapping classification to AA FASTA file path
+    :param working_dir: working directory path
+    :param num_threads: number of CPUs to use
+    :param min_seq_id: minimum sequence identity for clustering (0.0-1.0) [default: 0.9]
+    :param cov_mode: coverage mode
+                     0: coverage of query and target
+                     1: coverage of target
+                     2: coverage of query
+                     3: target seq. length >= x% of query length
+                     4: query seq. length >= x% of target length
+                     5: short seq. >= x% of the other seq. length [default: 0]
+    :param coverage: fraction of aligned (covered) residues [default: 0.8]
+    :param sensitivity: sensitivity: 1.0 faster; 4.0 fast; 7.5 sensitive [default: 4.0]
+    :param e_value: E-value threshold [default: 1e-3]
+    :return: dictionary mapping classification to mmseqs2 output directory
+    """
+    mmseqs_output_dirs = {}
+
+    for cls, aa_fasta_file in aa_fasta_files.items():
+        class_name = cls.replace('/', '_').replace('|', '_')
+        mmseqs_output_prefix = F'{working_dir}/mmseqs2_aa_{class_name}/clusters'
+
+        # Create output directory for mmseqs2 results
+        os.makedirs(os.path.dirname(mmseqs_output_prefix), exist_ok=True)
+
+        # Create a temporary directory for mmseqs2 intermediate files
+        tmp_dir = F'{working_dir}/.mmseqs2_tmp_{class_name}'
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        try:
+            # Run mmseqs2 easy-cluster with default parameters
+            cmd = (
+                F'mmseqs easy-cluster {aa_fasta_file} {mmseqs_output_prefix} '
+                F'{tmp_dir} '
+                F'--min-seq-id {min_seq_id} '
+                F'--cov-mode {cov_mode} '
+                F'-c {coverage} '
+                F'-s {sensitivity} '
+                F'-e {e_value} '
+                F'--threads {num_threads}'
+            )
+
+            subprocess.check_call(cmd, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+
+            # Store the directory containing the output files
+            mmseqs_output_dirs[cls] = os.path.dirname(mmseqs_output_prefix)
+
+        except subprocess.CalledProcessError as e:
+            print(F'Error clustering {class_name} with mmseqs2: {e}')
+            continue
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+
+    return mmseqs_output_dirs
+
+
+def parse_mmseqs2_clusters(cluster_tsv_file: str) -> Dict[str, list]:
+    """
+    Parse mmseqs2 cluster output file (adjacency list format).
+    Format: cluster_id (representative) \t member_id (one per line)
+
+    Example:
+      7545    7545   (representative 7545 contains member 7545)
+      8910    44     (representative 8910 contains member 44)
+      8910    133    (representative 8910 contains member 133)
+
+    :param cluster_tsv_file: path to clusters_cluster.tsv file from mmseqs2
+    :return: dictionary {cluster_id: [list of member_ids]}
+    """
+    clusters = {}
+
+    if not os.path.exists(cluster_tsv_file):
+        return clusters
+
+    with open(cluster_tsv_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 2:
+                cluster_id = parts[0]  # representative sequence ID (cluster ID)
+                member_id = parts[1]   # member sequence ID
+
+                if cluster_id not in clusters:
+                    clusters[cluster_id] = []
+                clusters[cluster_id].append(member_id)
+
+    return clusters
+
+
+def group_sequences_by_clusters(mmseqs_output_dirs: Dict[str, str],
+                                max_class_size: int) -> Dict[str, Dict[int, list]]:
+    """
+    Group sequences based on mmseqs2 clustering results, respecting max_class_size.
+
+    Algorithm:
+    1. Parse mmseqs2 cluster assignments from clusters_cluster.tsv
+    2. Sort clusters by size (largest first)
+    3. For large clusters (>= 2x max_class_size): split into equal-sized groups
+    4. For smaller clusters: merge together to reach ~max_class_size
+    5. Avoid splitting small clusters; instead merge them
+
+    :param mmseqs_output_dirs: dictionary mapping classification to mmseqs2 output directory
+    :param max_class_size: maximum number of sequences per group
+    :return: dictionary {classification: {group_id: [sequence_ids]}}
+    """
+    sequence_groups = {}
+
+    for cls in mmseqs_output_dirs:
+        mmseqs_dir = mmseqs_output_dirs[cls]
+        cluster_file = F'{mmseqs_dir}/clusters_cluster.tsv'
+
+        # Parse cluster assignments
+        clusters = parse_mmseqs2_clusters(cluster_file)
+
+        if not clusters:
+            # If no clusters found, return empty groups
+            sequence_groups[cls] = {}
+            continue
+
+        # Convert to list of (cluster_id, [members]) sorted by cluster size (descending)
+        cluster_list = [(cluster_id, members) for cluster_id, members in clusters.items()]
+        cluster_list.sort(key=lambda x: len(x[1]), reverse=True)
+
+        groups = {}
+        current_group = 1
+        current_group_members = []
+
+        # First pass: handle large clusters that need splitting
+        remaining_clusters = []
+
+        for cluster_id, members in cluster_list:
+            cluster_size = len(members)
+
+            # If cluster is >= 2x max_class_size, split it
+            if cluster_size >= 2 * max_class_size:
+                # Split large cluster into equal-sized groups
+                num_subgroups = (cluster_size + max_class_size - 1) // max_class_size
+                subgroup_size = cluster_size // num_subgroups
+
+                for i in range(num_subgroups):
+                    start_idx = i * subgroup_size
+                    if i == num_subgroups - 1:
+                        # Last subgroup gets remaining members
+                        end_idx = cluster_size
+                    else:
+                        end_idx = (i + 1) * subgroup_size
+
+                    subgroup = members[start_idx:end_idx]
+                    groups[current_group] = subgroup
+                    current_group += 1
+            else:
+                # Keep smaller clusters intact for merging
+                remaining_clusters.append((cluster_id, members))
+
+        # Second pass: merge smaller clusters
+        for cluster_id, members in remaining_clusters:
+            cluster_size = len(members)
+
+            # Check if adding this cluster would exceed max_class_size
+            if len(current_group_members) + cluster_size <= max_class_size:
+                # Add to current group
+                current_group_members.extend(members)
+            else:
+                # Save current group if it has members and start a new one
+                if current_group_members:
+                    groups[current_group] = current_group_members
+                    current_group += 1
+                    current_group_members = []
+
+                # Add cluster to new group
+                current_group_members.extend(members)
+
+        # Save the last group if it has members
+        if current_group_members:
+            groups[current_group] = current_group_members
+
+        sequence_groups[cls] = groups
+
+    return sequence_groups
+
+
+def save_grouping_info(sequence_groups: Dict[str, Dict[int, list]],
+                       mmseqs_output_dirs: Dict[str, str]) -> None:
+    """
+    Save grouping information to mmseqs2 output directory for debugging.
+
+    :param sequence_groups: dictionary {classification: {group_id: [sequence_ids]}}
+    :param mmseqs_output_dirs: dictionary mapping classification to mmseqs2 output directory
+    :return: None
+    """
+    for cls in sequence_groups:
+        mmseqs_dir = mmseqs_output_dirs[cls]
+        grouping_file = F'{mmseqs_dir}/grouping_info.txt'
+
+        with open(grouping_file, 'w') as f:
+            f.write("# Grouping information based on mmseqs2 clustering\n")
+            f.write("# Format: Group_ID\tNumber_of_sequences\tSequence_IDs\n\n")
+
+            for group_id in sorted(sequence_groups[cls].keys()):
+                members = sequence_groups[cls][group_id]
+                member_str = ','.join(str(m) for m in members)
+                f.write(F'{group_id}\t{len(members)}\t{member_str}\n')
 
 
 def make_blast_db(fasta_file: str, dbtype: str = 'nucl'):

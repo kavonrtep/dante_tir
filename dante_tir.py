@@ -109,6 +109,32 @@ def main():
     # export tir_domains to file
     dt.save_gff3_dict_to_file(tir_domains, F'{args.working_dir}/tir_domains.gff3')
 
+    # Extract and save amino acid sequences from DANTE records
+    print("\nExtracting amino acid sequences from DANTE domains...", end="")
+    aa_sequences = dt.extract_aa_sequences_from_dante(tir_domains)
+    aa_fasta_files = dt.save_aa_sequences_by_superfamily(aa_sequences, args.working_dir)
+    print(" done")
+
+    # Cluster amino acid sequences using mmseqs2
+    print("Clustering amino acid sequences with mmseqs2...", end="")
+    aa_mmseqs2_output_dirs = dt.cluster_aa_sequences_mmseqs2(
+        aa_fasta_files,
+        args.working_dir,
+        num_threads=args.cpu
+    )
+    print(" done")
+
+    # Group sequences based on clustering if max_class_size is specified
+    aa_sequence_groups = None
+    if args.max_class_size:
+        print("Grouping sequences based on mmseqs2 clustering...", end="")
+        aa_sequence_groups = dt.group_sequences_by_clusters(
+            aa_mmseqs2_output_dirs,
+            args.max_class_size
+        )
+        # Save grouping information for debugging
+        dt.save_grouping_info(aa_sequence_groups, aa_mmseqs2_output_dirs)
+        print(" done")
 
     # Read FASTA file with genome assembly
     genome = dt.fasta_to_dict(args.fasta)
@@ -143,17 +169,24 @@ def main():
 
     # Split original sequences BEFORE fragmentation (if needed)
     if args.max_class_size:
-        print(f"Splitting large classes (threshold: {args.max_class_size} sequences)...", end="")
-        split_upstream, split_downstream, split_mapping = dt.split_sequences_by_class(
-            upstream_seq, downstream_seq, args.max_class_size
-        )
+        if aa_sequence_groups:
+            # Use clustering-based splitting
+            print(f"Splitting classes based on AA domain clustering...", end="")
+            split_upstream, split_downstream, split_mapping = dt.split_sequences_by_clustering(
+                upstream_seq, downstream_seq, aa_sequence_groups
+            )
+        else:
+            # Fallback: random splitting by threshold
+            print(f"Splitting large classes (threshold: {args.max_class_size} sequences)...", end="")
+            split_upstream, split_downstream, split_mapping = dt.split_sequences_by_class(
+                upstream_seq, downstream_seq, args.max_class_size
+            )
         print(" done")
     else:
         # No splitting: wrap in part structure for uniform processing
         split_upstream = {cls: {1: upstream_seq[cls]} for cls in upstream_seq}
         split_downstream = {cls: {1: downstream_seq[cls]} for cls in downstream_seq}
         split_mapping = {cls: [1] for cls in upstream_seq}
-
     # Fragment each part separately and save to files
     frg_names_upstream = {}
     frg_names_downstream = {}
