@@ -295,13 +295,23 @@ def main():
             cls.replace('/', '_').replace('|', '_')
             )
         for ctg_name in ctg_upstream[cls]:
-            filename = prefix + '_upstream_' + ctg_name + '.fasta'
-            dt.save_fasta_dict_to_file(ctg_upstream[cls][ctg_name].alignment,
+            # Include part number in filename to avoid collisions from split assemblies
+            contig_obj = ctg_upstream[cls][ctg_name]
+            if contig_obj.part_num is not None:
+                filename = prefix + '_upstream_{}_part{:03d}.fasta'.format(ctg_name, contig_obj.part_num)
+            else:
+                filename = prefix + '_upstream_' + ctg_name + '.fasta'
+            dt.save_fasta_dict_to_file(contig_obj.alignment,
                                        filename, uppercase=False)
 
         for ctg_name in ctg_downstream[cls]:
-            filename = prefix + '_downstream_' + ctg_name + '.fasta'
-            dt.save_fasta_dict_to_file(ctg_downstream[cls][ctg_name].alignment,
+            # Include part number in filename to avoid collisions from split assemblies
+            contig_obj = ctg_downstream[cls][ctg_name]
+            if contig_obj.part_num is not None:
+                filename = prefix + '_downstream_{}_part{:03d}.fasta'.format(ctg_name, contig_obj.part_num)
+            else:
+                filename = prefix + '_downstream_' + ctg_name + '.fasta'
+            dt.save_fasta_dict_to_file(contig_obj.alignment,
                                        filename, uppercase=False)
 
     # find TIRs in contigs using R script

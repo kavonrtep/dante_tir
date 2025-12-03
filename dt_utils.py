@@ -447,7 +447,7 @@ def parse_cap3_aln(aln_file, input_fasta_file: str, ncpus: int = 1):
 
     Handles both single alignment file and multiple alignment files (from splitting).
     When multiple files are provided, contigs from all parts are merged into a single
-    output dictionary.
+    output dictionary, with part information preserved in each Contig object.
 
     :param aln_file: Path to cap3 alignment file, or list of paths for split assemblies.
     :param input_fasta_file: Path to input FASTA file used for assembly, or list of paths for splits.
@@ -472,60 +472,67 @@ def parse_cap3_aln(aln_file, input_fasta_file: str, ncpus: int = 1):
             f"number of FASTA files ({len(fasta_files)})"
         )
 
-    # Process each part separately, then merge
+    # Process each part separately to avoid fragment ID collisions
     all_reads = {}
     all_orientations = {}
     all_alignments = {}
-    all_fasta_data = {}
+    all_part_nums = {}  # Track which part each contig came from
+    all_adjusted_alignments = {}
 
-    for aln_file_part, fasta_file_part in zip(aln_files, fasta_files):
+    for part_idx, (aln_file_part, fasta_file_part) in enumerate(zip(aln_files, fasta_files)):
+        part_num = part_idx + 1  # Parts are 1-indexed
         reads, orientations, alignments = _parse_single_cap3_aln(aln_file_part)
 
-        # Merge with all previous parts
+        # Load FASTA data for this part only
+        fasta_data = fasta_to_dict(fasta_file_part)
+
+        # Filter contigs for this part based on criteria
+        n_min_elements = 4
+        contigs_to_exclude = []
+        for contig in alignments:
+            n_elements = len({read.split('_')[0] for read in alignments[contig]})
+            N_plus = sum(
+                1 for read in alignments[contig] if orientations[contig][read] == '+'
+                )
+            N_minus = len(orientations[contig]) - N_plus
+            if (max(N_plus, N_minus) / (N_plus + N_minus) < 0.8) or (
+                    n_elements < n_min_elements):
+                contigs_to_exclude.append(contig)
+        for contig in contigs_to_exclude:
+            del alignments[contig]
+            del reads[contig]
+            del orientations[contig]
+
+        # Process contigs for this part with its own FASTA data
+        args_list = [(contig, alignments[contig], orientations[contig], "-" * 100) for contig
+            in alignments]
+        adjusted_alignments = {}
+
+        # Use ProcessPoolExecutor with initializer to pass the part-specific FASTA data to workers
+        with concurrent.futures.ProcessPoolExecutor(
+                initializer=init_worker, initargs=(fasta_data,)
+                ) as executor:
+            futures = {executor.submit(process_contig_helper, args): args[0] for args in
+                       args_list}
+            for future in concurrent.futures.as_completed(futures):
+                contig, trimmed = future.result()
+                adjusted_alignments[contig] = trimmed
+
+        # Merge results from this part with overall results
         all_reads.update(reads)
         all_orientations.update(orientations)
         all_alignments.update(alignments)
+        all_adjusted_alignments.update(adjusted_alignments)
 
-        # Load FASTA data for this part
-        fasta_data = fasta_to_dict(fasta_file_part)
-        all_fasta_data.update(fasta_data)
-
-    # Filter contigs based on criteria (applied after merging all parts)
-    n_min_elements = 4
-    contigs_to_exclude = []
-    for contig in all_alignments:
-        n_elements = len({read.split('_')[0] for read in all_alignments[contig]})
-        N_plus = sum(
-            1 for read in all_alignments[contig] if all_orientations[contig][read] == '+'
-            )
-        N_minus = len(all_orientations[contig]) - N_plus
-        if (max(N_plus, N_minus) / (N_plus + N_minus) < 0.8) or (
-                n_elements < n_min_elements):
-            contigs_to_exclude.append(contig)
-    for contig in contigs_to_exclude:
-        del all_alignments[contig]
-        del all_reads[contig]
-        del all_orientations[contig]
-
-    # Create argument tuples for per-contig processing
-    args_list = [(contig, all_alignments[contig], all_orientations[contig], "-" * 100) for contig
-        in all_alignments]
-    adjusted_alignments = {}
-
-    # Use ProcessPoolExecutor with initializer to pass the FASTA data to workers.
-    with concurrent.futures.ProcessPoolExecutor(
-            initializer=init_worker, initargs=(all_fasta_data,)
-            ) as executor:
-        futures = {executor.submit(process_contig_helper, args): args[0] for args in
-                   args_list}
-        for future in concurrent.futures.as_completed(futures):
-            contig, trimmed = future.result()
-            adjusted_alignments[contig] = trimmed
+        # Track part number for each contig
+        for contig_name in reads.keys():
+            all_part_nums[contig_name] = part_num
 
     contigs = {}
     for contig in all_reads:
         contigs[contig] = Contig(
-            all_reads[contig], all_orientations[contig], adjusted_alignments[contig]
+            all_reads[contig], all_orientations[contig], all_adjusted_alignments[contig],
+            part_num=all_part_nums.get(contig)
             )
     return contigs
 
@@ -936,16 +943,18 @@ class Contig:
     """
 
     def __init__(self, reads: List[str], orientations: Dict[str, str],
-        alignment: Dict[str, str]):
+        alignment: Dict[str, str], part_num: int = None):
         """
         :type alignments: Dict[str, str]
         :type orientations: Dict[str, str]
         :type reads: List[str]
+        :type part_num: int or None - which part this contig came from (for split assemblies)
         """
         self.reads = reads
         self.orientations = orientations
         self.alignment = alignment
         self.alignment_total_length = len(alignment[reads[0]])
+        self.part_num = part_num
         self._pssm = None
         self._coverage = None
         self._consensus = None

@@ -907,6 +907,8 @@ process_region_files <- function(file_list, side, mcmc_seed = 42, n_beast_iter =
 
     if (!is.na(cp)) {
       contig_id <- gsub("[.]fasta", "", gsub(".+_Contig", "", f))
+      # Remove _part00X suffix if present (from split contig assemblies)
+      contig_id <- gsub("_part\\d+$", "", contig_id)
       info <- extract_info_from_switch_points(aln_info, ctg, cp)
       if (is.null(info)) {
         next
