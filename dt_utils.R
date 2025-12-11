@@ -1374,38 +1374,62 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
       next
     }
 
-    # Get sequence lengths for boundary validation
+    # Get sequence lengths to filter out-of-range BLAST hits
     upstream_lengths <- width(upstream_regions)
     names(upstream_lengths) <- names(upstream_regions)
     downstream_lengths <- width(downstream_regions)
     names(downstream_lengths) <- names(downstream_regions)
 
-    # Create safe ranges for TIR extraction (sstart to sstart+100)
-    # Ensure start >= 1 and end <= sequence length
-    up_tir_start <- pmax(1, blast_up_df$sstart)
-    up_tir_end <- pmin(blast_up_df$sstart + 100, upstream_lengths[blast_up_df$saccver])
-    down_tir_start <- pmax(1, blast_down_df$sstart)
-    down_tir_end <- pmin(blast_down_df$sstart + 100, downstream_lengths[blast_down_df$saccver])
+    # Filter BLAST results to remove hits too close to sequence boundaries
+    # Also filter out hits where sequence name doesn't exist in the database
+    valid_up_seq <- blast_up_df$saccver %in% names(upstream_regions)
+    valid_down_seq <- blast_down_df$saccver %in% names(downstream_regions)
 
-    # Create safe ranges for TSD extraction (sstart-12 to sstart-1)
-    # Ensure start >= 1 and end <= sequence length
-    up_tsd_start <- pmax(1, blast_up_df$sstart - 12)
-    up_tsd_end <- pmax(1, pmin(blast_up_df$sstart - 1, upstream_lengths[blast_up_df$saccver]))
-    down_tsd_start <- pmax(1, blast_down_df$sstart - 12)
-    down_tsd_end <- pmax(1, pmin(blast_down_df$sstart - 1, downstream_lengths[blast_down_df$saccver]))
+    # For valid sequences, check if coordinates are within bounds
+    # Need: sstart - 12 >= 1 (for TSD) and sstart + 100 <= seq_length (for TIR)
+    valid_up_coords <- valid_up_seq &
+                       blast_up_df$sstart >= 13 &
+                       (blast_up_df$sstart + 100) <= upstream_lengths[blast_up_df$saccver]
+    valid_down_coords <- valid_down_seq &
+                         blast_down_df$sstart >= 13 &
+                         (blast_down_df$sstart + 100) <= downstream_lengths[blast_down_df$saccver]
 
-    # Create GRanges with validated boundaries
+    # Report filtering statistics
+    if (sum(!valid_up_seq) > 0) {
+      message("Filtered out ", sum(!valid_up_seq), " upstream BLAST hits with invalid sequence names")
+    }
+    if (sum(!valid_down_seq) > 0) {
+      message("Filtered out ", sum(!valid_down_seq), " downstream BLAST hits with invalid sequence names")
+    }
+    if (sum(valid_up_seq & !valid_up_coords) > 0) {
+      message("Filtered out ", sum(valid_up_seq & !valid_up_coords), " upstream BLAST hits too close to sequence boundaries")
+    }
+    if (sum(valid_down_seq & !valid_down_coords) > 0) {
+      message("Filtered out ", sum(valid_down_seq & !valid_down_coords), " downstream BLAST hits too close to sequence boundaries")
+    }
+
+    # Apply filters
+    blast_up_df <- blast_up_df[valid_up_coords, ]
+    blast_down_df <- blast_down_df[valid_down_coords, ]
+
+    # Check if any valid hits remain
+    if (nrow(blast_up_df) == 0 || nrow(blast_down_df) == 0) {
+      message("No valid BLAST hits remain after boundary filtering for ", cls, ". Skipping.")
+      next
+    }
+
+    # Now create ranges with the filtered data (no boundary issues possible)
     gr_up_TIR <- GRanges(seqnames = blast_up_df$saccver,
-                         ranges = IRanges(start = up_tir_start, end = up_tir_end),
+                         ranges = IRanges(start = blast_up_df$sstart, end = blast_up_df$sstart + 100),
                          strand = "*")
     gr_down_TIR <- GRanges(seqnames = blast_down_df$saccver,
-                           ranges = IRanges(start = down_tir_start, end = down_tir_end),
+                           ranges = IRanges(start = blast_down_df$sstart, end = blast_down_df$sstart + 100),
                            strand = "*")
     gr_up_TSD <- GRanges(seqnames = blast_up_df$saccver,
-                         ranges = IRanges(start = up_tsd_start, end = up_tsd_end),
+                         ranges = IRanges(start = blast_up_df$sstart - 12, end = blast_up_df$sstart - 1),
                          strand = "*")
     gr_down_TSD <- GRanges(seqnames = blast_down_df$saccver,
-                           ranges = IRanges(start = down_tsd_start, end = down_tsd_end),
+                           ranges = IRanges(start = blast_down_df$sstart - 12, end = blast_down_df$sstart - 1),
                            strand = "*")
 
     blast_up_df$TIR <- as.character(getSeq(upstream_regions, gr_up_TIR))
