@@ -69,6 +69,7 @@ echo "run_number,genome,n_beast_iter,max_class_size,status,elapsed_seconds,elaps
 TOTAL_RUNS=0
 SUCCESSFUL_RUNS=0
 FAILED_RUNS=0
+SKIPPED_RUNS=0
 
 # Loop through genomes sequentially
 for genome in "${GENOMES[@]}"; do
@@ -100,6 +101,20 @@ for genome in "${GENOMES[@]}"; do
             # Create output directory name
             RUN_DIR="$OUTPUT_DIR/$genome/nbeast_${n_beast}_maxclass_${max_class}"
             mkdir -p "$RUN_DIR"
+
+            # Check if output already exists (skip if completed)
+            FINAL_OUTPUT="$RUN_DIR/DANTE_TIR_final.gff3"
+            if [ -f "$FINAL_OUTPUT" ]; then
+                SKIPPED_RUNS=$((SKIPPED_RUNS + 1))
+                echo "----------------------------------------" | tee -a "$MAIN_LOG"
+                echo "Run #$TOTAL_RUNS" | tee -a "$MAIN_LOG"
+                echo "Genome: $genome" | tee -a "$MAIN_LOG"
+                echo "Parameters: n_beast_iter=$n_beast, max_class_size=$max_class" | tee -a "$MAIN_LOG"
+                echo "Output: $RUN_DIR" | tee -a "$MAIN_LOG"
+                echo "STATUS: SKIPPED (output already exists)" | tee -a "$MAIN_LOG"
+                echo "" | tee -a "$MAIN_LOG"
+                continue
+            fi
 
             # Log files for this run
             STDOUT_LOG="$RUN_DIR/stdout.log"
@@ -171,7 +186,12 @@ echo "========================================" | tee -a "$MAIN_LOG"
 echo "Total runs: $TOTAL_RUNS" | tee -a "$MAIN_LOG"
 echo "Successful: $SUCCESSFUL_RUNS" | tee -a "$MAIN_LOG"
 echo "Failed: $FAILED_RUNS" | tee -a "$MAIN_LOG"
+echo "Skipped: $SKIPPED_RUNS" | tee -a "$MAIN_LOG"
 echo "Completed at: $(date)" | tee -a "$MAIN_LOG"
+echo "" | tee -a "$MAIN_LOG"
+echo "Output files:" | tee -a "$MAIN_LOG"
+echo "  Main log: $MAIN_LOG" | tee -a "$MAIN_LOG"
+echo "  Timing data (CSV): $TIMING_CSV" | tee -a "$MAIN_LOG"
 echo "========================================" | tee -a "$MAIN_LOG"
 
 if [ $FAILED_RUNS -gt 0 ]; then
