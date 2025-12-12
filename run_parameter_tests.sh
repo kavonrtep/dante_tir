@@ -31,7 +31,7 @@ mkdir -p "$OUTPUT_DIR"
 # Parameters to test
 GENOMES=("Ath" "Med" "Ghi" "Sce")
 N_BEAST_ITER=(1 5 10)
-MAX_CLASS_SIZE=("not_used" 1000 2000 4000)
+MAX_CLASS_SIZE=("not_used" 2000 4000)
 THREADS=20
 
 # Get the directory where dante_tir.py is located (same as this script)

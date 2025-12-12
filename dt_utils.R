@@ -1332,6 +1332,8 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
 
   for (i in seq_along(unique_classes)) {
     cls <- unique_classes[i]
+    message("DEBUG: Processing classification: ", cls)
+
     # 8. Check that the consensus file names for the current classification are defined.
     if (is.na(cons_file_df$upstream_cons[i]) || is.na(cons_file_df$downstream_cons[i])) {
       message("Consensus files for ", cls, " are not defined. Skipping BLAST for this class.")
@@ -1344,6 +1346,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     blast_upstream <- file.path(output, "blastn", paste0(cls, "_upstream.blastn"))
     blast_downstream <- file.path(output, "blastn", paste0(cls, "_downstream.blastn"))
 
+    message("DEBUG: Running BLAST for ", cls)
     # 9. Call blast_helper() to create databases, run BLAST, and process outputs.
     blast_res <- blast_helper(query_up = upstream_cons,
                               query_down = downstream_cons,
@@ -1360,39 +1363,77 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     blast_up_df <- blast_res$blast_up_df
     blast_down_df <- blast_res$blast_down_df
 
+    message("DEBUG: BLAST completed. Upstream hits: ", nrow(blast_up_df), ", Downstream hits: ", nrow(blast_down_df))
+
     # 10. Validate blast results; if empty, skip this classification.
     if (nrow(blast_up_df) == 0 || nrow(blast_down_df) == 0) {
       message("BLAST returned empty results for ", cls, ". Skipping this class.")
       next
     }
 
+    message("DEBUG: Reading sequence databases for ", cls)
     # 11. Read sequence databases and verify that they are non-empty.
     upstream_regions <- readDNAStringSet(upstream_db)
     downstream_regions <- readDNAStringSet(downstream_db)
+    message("DEBUG: Upstream regions: ", length(upstream_regions), ", Downstream regions: ", length(downstream_regions))
+
     if (length(upstream_regions) == 0 || length(downstream_regions) == 0) {
       message("No sequences in upstream and donwstream db for ", cls, ". Skipping..")
       next
     }
 
+    message("DEBUG: Getting sequence lengths for boundary checking")
     # Get sequence lengths to filter out-of-range BLAST hits
     upstream_lengths <- width(upstream_regions)
     names(upstream_lengths) <- names(upstream_regions)
     downstream_lengths <- width(downstream_regions)
     names(downstream_lengths) <- names(downstream_regions)
 
+    message("DEBUG: Checking for valid sequence names in BLAST results")
     # Filter BLAST results to remove hits too close to sequence boundaries
     # Also filter out hits where sequence name doesn't exist in the database
     valid_up_seq <- blast_up_df$saccver %in% names(upstream_regions)
     valid_down_seq <- blast_down_df$saccver %in% names(downstream_regions)
 
+    message("DEBUG: Valid upstream sequences: ", sum(valid_up_seq), "/", length(valid_up_seq))
+    message("DEBUG: Valid downstream sequences: ", sum(valid_down_seq), "/", length(valid_down_seq))
+
+    message("DEBUG: Checking coordinate boundaries")
     # For valid sequences, check if coordinates are within bounds
     # Need: sstart - 12 >= 1 (for TSD) and sstart + 100 <= seq_length (for TIR)
-    valid_up_coords <- valid_up_seq &
-                       blast_up_df$sstart >= 13 &
-                       (blast_up_df$sstart + 100) <= upstream_lengths[blast_up_df$saccver]
-    valid_down_coords <- valid_down_seq &
-                         blast_down_df$sstart >= 13 &
-                         (blast_down_df$sstart + 100) <= downstream_lengths[blast_down_df$saccver]
+    # Only check coordinates for sequences that exist in the database
+    valid_up_coords <- rep(FALSE, nrow(blast_up_df))
+    valid_down_coords <- rep(FALSE, nrow(blast_down_df))
+
+    # Check coordinates only for valid sequence names
+    if (sum(valid_up_seq) > 0) {
+      message("DEBUG: Checking upstream coordinate boundaries for valid sequences")
+      valid_idx <- which(valid_up_seq)
+      for (idx in valid_idx) {
+        seq_name <- blast_up_df$saccver[idx]
+        seq_len <- upstream_lengths[seq_name]
+        sstart <- blast_up_df$sstart[idx]
+        if (!is.na(seq_len) && !is.na(sstart)) {
+          valid_up_coords[idx] <- (sstart >= 13) && ((sstart + 100) <= seq_len)
+        }
+      }
+    }
+
+    if (sum(valid_down_seq) > 0) {
+      message("DEBUG: Checking downstream coordinate boundaries for valid sequences")
+      valid_idx <- which(valid_down_seq)
+      for (idx in valid_idx) {
+        seq_name <- blast_down_df$saccver[idx]
+        seq_len <- downstream_lengths[seq_name]
+        sstart <- blast_down_df$sstart[idx]
+        if (!is.na(seq_len) && !is.na(sstart)) {
+          valid_down_coords[idx] <- (sstart >= 13) && ((sstart + 100) <= seq_len)
+        }
+      }
+    }
+
+    message("DEBUG: Valid upstream coordinates: ", sum(valid_up_coords), "/", nrow(blast_up_df))
+    message("DEBUG: Valid downstream coordinates: ", sum(valid_down_coords), "/", nrow(blast_down_df))
 
     # Report filtering statistics
     if (sum(!valid_up_seq) > 0) {
