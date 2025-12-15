@@ -315,11 +315,27 @@ def main():
                                        filename, uppercase=False)
 
     # find TIRs in contigs using R script
+    # Create log directory for R script output
+    log_dir = os.path.join(args.output_dir, 'log')
+    if not os.path.exists(log_dir):
+        os.mkdir(log_dir)
+
+    stdout_log = os.path.join(log_dir, 'stdout.txt')
+    stderr_log = os.path.join(log_dir, 'stderr.txt')
+
     cmd = (F'{script_dir}/detect_tirs.R --contig_dir {args.working_dir} --output '
            F'{args.working_dir} --threads {args.cpu} '
            F'--genome {args.fasta} --seed {args.seed} '
            F'--n_beast_iter {args.n_beast_iter}')
-    subprocess.check_call(cmd, shell=True)
+
+    print(f"\nRunning TIR detection (logs in {log_dir})...")
+    with open(stdout_log, 'w') as stdout_f, open(stderr_log, 'w') as stderr_f:
+        result = subprocess.run(cmd, shell=True, stdout=stdout_f, stderr=stderr_f)
+
+    if result.returncode != 0:
+        print(f"ERROR: TIR detection failed with return code {result.returncode}")
+        print(f"Check logs in {log_dir} for details")
+        raise subprocess.CalledProcessError(result.returncode, cmd)
 
     # copy output files to output directory
     file_to_copy = ["DANTE_TIR*",
