@@ -155,14 +155,22 @@ for (i in names(g_split)) {
 
     t3 <- consensusMatrix(tir3, as.prob = FALSE, baseOnly = TRUE)
     t5 <- consensusMatrix(tir5, as.prob = FALSE, baseOnly = TRUE)
-    png(logo_name, height = 800, width = 100 + ncol(t5) * 50)
+    # Limit logo to first 200 positions to avoid cairo size errors
+    max_logo_pos <- 100
+    t3_plot <- t3[, seq_len(min(ncol(t3), max_logo_pos)), drop = FALSE]
+    t5_plot <- t5[, seq_len(min(ncol(t5), max_logo_pos)), drop = FALSE]
+    n_pos <- ncol(t5_plot)
+    logo_truncated <- ncol(t5) > max_logo_pos || ncol(t3) > max_logo_pos
+    png(logo_name, height = 800, width = 100 + n_pos * 50)
     par(mfrow = c(2, 1))
-    plot.logo(t(t3))
-    axis(side = 1, at = 1:ncol(t5) + 0.5, labels = 1:ncol(t5), tick = FALSE)
-    mtext("3' TIR", cex = 2, adj = 1)
-    plot.logo(t(t5))
-    axis(side = 1, at = 1:ncol(t5) + 0.5, labels = 1:ncol(t5), tick = FALSE)
-    mtext("5' TIR", cex = 2, adj = 1)
+    plot.logo(t(t3_plot))
+    axis(side = 1, at = 1:n_pos + 0.5, labels = 1:n_pos, tick = FALSE)
+    label3 <- if (logo_truncated) paste0("3' TIR (first ", ncol(t3_plot), " of ", ncol(t3), " bp)") else "3' TIR"
+    mtext(label3, cex = 2, adj = 1)
+    plot.logo(t(t5_plot))
+    axis(side = 1, at = 1:n_pos + 0.5, labels = 1:n_pos, tick = FALSE)
+    label5 <- if (logo_truncated) paste0("5' TIR (first ", ncol(t5_plot), " of ", ncol(t5), " bp)") else "5' TIR"
+    mtext(label5, cex = 2, adj = 1)
     dev.off()
 
     t3aln <- DNAMultipleAlignment(make_seq_equal_width(tir3))
