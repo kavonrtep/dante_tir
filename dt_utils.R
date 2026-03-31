@@ -1479,7 +1479,7 @@ round2 <- function(res_df, ctg_list_upstream, ctg_list_downstream, gr1,
     blast_down_df$TSD <- as.character(getSeq(downstream_regions, gr_down_TSD))
 
     res2 <- list()
-    for (j in seq_along(blast_up_df$TIR)) {
+    for (j in seq_len(min(nrow(blast_up_df), nrow(blast_down_df)))) {
       tir_aln <- eval_aln_length_alt(blast_up_df$TIR[j], blast_down_df$TIR[j])
       tsd <- extract_TSD(blast_up_df$TSD[j],
                          as.character(reverseComplement(DNAString(blast_down_df$TSD[j]))))
