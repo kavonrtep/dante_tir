@@ -1,0 +1,57 @@
+# Version is extracted by regex from a copy of the top-level version.py
+# placed in this recipe dir by the conda-release workflow (or manually
+# "cp ../../version.py ." prior to a local build). load_file_data only
+# supports JSON/YAML/TOML and rejects .py; load_file_regex reads any
+# text file and returns the re.Match object.
+{% set m = load_file_regex(load_file='version.py',
+                           regex_pattern="__version__\\s*=\\s*['\"]([^'\"]+)['\"]",
+                           from_recipe_dir=True) %}
+{% set version = m.group(1) if m else '0.0.0.dev' %}
+
+package:
+  name: dante_tir
+  version: {{ version }}
+
+source:
+  # Build from the checked-out source tree. No URL / sha256; CI checks
+  # out at the release tag and the build consumes that tree.
+  path: ../..
+
+build:
+  number: 0
+  noarch: generic
+
+requirements:
+  run:
+    - python >=3.6.0
+    - mmseqs2 >=14
+    - blast
+    - cap3
+    - r-optparse
+    - r-rbeast
+    - bioconductor-biostrings
+    - bioconductor-bsgenome
+    - bioconductor-rtracklayer
+
+test:
+  commands:
+    - dante_tir.py --version
+    - dante_tir.py --help | grep -qi 'usage'
+    - dante_tir_summary.R --help | grep -qi 'usage'
+
+about:
+  home: https://github.com/kavonrtep/dante_tir
+  dev_url: https://github.com/kavonrtep/dante_tir
+  license: GPL-3.0-only
+  license_family: GPL3
+  license_file: LICENSE
+  summary: >
+    DANTE_TIR identifies full-length DNA transposons with Terminal Inverted
+    Repeats (TIRs), starting from DANTE annotations of conserved transposase
+    domains.
+
+extra:
+  copy_test_source_files: true
+  final: true
+  recipe-maintainers:
+    - petrnovak

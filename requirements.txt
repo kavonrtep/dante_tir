@@ -1,0 +1,9 @@
+python >=3.6.0
+mmseqs2 >=14
+blast
+cap3
+r-optparse
+r-rbeast
+bioconductor-biostrings
+bioconductor-bsgenome
+bioconductor-rtracklayer
