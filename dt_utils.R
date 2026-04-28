@@ -17,15 +17,19 @@ concatGRanges <- function(gr1, gr2) {
 
 get_consensus_from_aln <- function (aln, perc=70, clean = FALSE){
   nucleotides <- c("A", "C", "G", "T", "N")
-  CM <- consensusMatrix(aln)[nucleotides,]
+  CM <- consensusMatrix(aln)[nucleotides, , drop = FALSE]
   if (clean){
-     CM <- CM[, colSums(CM) > 0]
+     keep <- colSums(CM) > 0
+     if (!any(keep)) return(DNAStringSet(""))
+     CM <- CM[, keep, drop = FALSE]
   }
+  if (ncol(CM) == 0) return(DNAStringSet(""))
   out <- DNAStringSet(get_consensus(CM, perc))
   out
 }
 
 get_consensus <- function (CM, perc=70){
+  if (!is.matrix(CM)) CM <- as.matrix(CM)
   totals <- colSums(CM)
   cm_perc <- t(t(CM)/totals) * 100
   cm_pass <- cm_perc >= perc
@@ -2076,6 +2080,17 @@ generate_html_report <- function(
       file = htmlfile,
       append = TRUE
     )
+
+    # If per-class processing failed, write a placeholder and skip the rest
+    if (is.null(info$df_name) || !file.exists(info$df_name)) {
+      msg <- if (is.null(info$error)) "no per-class output produced" else info$error
+      cat(
+        sprintf("<p><em>Per-class summary unavailable: %s</em></p>\n<hr/>\n", msg),
+        file = htmlfile,
+        append = TRUE
+      )
+      next
+    }
 
     # Display each image with max height
     imgs <- c(

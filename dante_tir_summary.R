@@ -303,6 +303,7 @@ for (i in names(g_split)) {
 
   }, error = function(e) {
     message("Error processing ", i, ": ", e$message)
+    file_info[[i]]$error <<- conditionMessage(e)
   })
 }
 
