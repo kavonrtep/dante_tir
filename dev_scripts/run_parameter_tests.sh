@@ -34,8 +34,8 @@ N_BEAST_ITER=(1 5 10)
 MAX_CLASS_SIZE=("not_used" 2000 4000)
 THREADS=20
 
-# Get the directory where dante_tir.py is located (same as this script)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# dante_tir.py lives one level up (this script is in dev_scripts/).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DANTE_TIR="$SCRIPT_DIR/dante_tir.py"
 
 # Check if dante_tir.py exists
