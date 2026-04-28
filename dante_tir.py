@@ -362,5 +362,20 @@ def main():
             f.write(F'##DANTE_TIR version {__version__}\n')
             f.writelines(lines[1:])
 
+    # Final summary so users can tell apart "ran ok, found nothing"
+    # vs "wrote no output / crashed".
+    final_gff = os.path.join(args.output_dir, 'DANTE_TIR_final.gff3')
+    if os.path.exists(final_gff):
+        with open(final_gff) as f:
+            n_records = sum(1 for line in f if line and not line.startswith('#'))
+        if n_records == 0:
+            print(F'\nDANTE_TIR_final.gff3: 0 TIR records '
+                  F'(pipeline completed cleanly; no TIRs detected on this input)')
+        else:
+            print(F'\nDANTE_TIR_final.gff3: {n_records} TIR record'
+                  F'{"s" if n_records != 1 else ""}')
+    else:
+        print(F'\nWARNING: {final_gff} was not produced — see {log_dir} for details')
+
 if __name__ == '__main__':
     main()

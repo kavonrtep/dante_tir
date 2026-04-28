@@ -83,10 +83,23 @@ tryCatch({
   gr3_unique <- round3_results$gr3_unique
   gr_fin <- round3_results$gr_fin
 
-  # exit if no TIRs were found
+  # No TIRs detected — still emit valid empty outputs so downstream
+  # consumers (dante_tir_summary.R, the python wrapper, CI assertions)
+  # don't have to special-case the "ran cleanly, found nothing" path.
   if (length(gr_fin) == 0) {
-    message("No TIRs found")
-    message("Exiting...")
+    message("No TIRs detected — writing empty DANTE_TIR_final.* outputs")
+    export(GRanges(), paste0(opt$output, "/DANTE_TIR_final.gff3"),
+           format = "gff3")
+    writeXStringSet(DNAStringSet(),
+                    paste0(opt$output, "/DANTE_TIR_final.fasta"))
+    write.table(
+      data.frame("Number of Elements" = integer(0),
+                 Classification = character(0),
+                 check.names = FALSE)[, c(2, 1)],
+      file = paste0(opt$output, "/TIR_classification_summary.txt"),
+      sep = "\t", quote = FALSE, row.names = FALSE
+    )
+    save.image(paste0(opt$output, "/DANTE_TIR.RData"))
     q(status = 0)
   }
 

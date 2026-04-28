@@ -27,16 +27,20 @@ echo "=== dante_tir on smoke subset (~ 15 s, expect 0 TIRs detected) ==="
 ./dante_tir.py -g "$DATA/smoke.gff3" -f "$DATA/smoke.fasta" \
                -o "$OUT/out" -c "$NCPU"
 
-# When zero TIRs are detected, dante_tir does not write
-# DANTE_TIR_final.{gff3,fasta} — only the log/ directory. The smoke
-# slice is sized to hit that path on purpose.
-[ -d "$OUT/out" ]      || { echo "FAIL: output dir missing"; exit 1; }
-[ -d "$OUT/out/log" ]  || { echo "FAIL: log/ dir missing"; exit 1; }
-[ -s "$OUT/out/log/stderr.txt" ] || \
-  { echo "FAIL: log/stderr.txt missing or empty"; exit 1; }
-grep -q "No TIRs found\|Exiting" "$OUT/out/log/stderr.txt" || \
-  { echo "FAIL: R log doesn't show expected 'No TIRs found' marker"; \
-    tail -20 "$OUT/out/log/stderr.txt"; exit 1; }
+# Even when zero TIRs are detected, the pipeline now emits valid empty
+# DANTE_TIR_final.{gff3,fasta} with proper headers (gff3 has the
+# ##gff-version 3 + ##DANTE_TIR version banner) so downstream tools
+# don't have to special-case "ran cleanly, found nothing".
+[ -d "$OUT/out" ]                         || { echo "FAIL: output dir missing"; exit 1; }
+[ -d "$OUT/out/log" ]                     || { echo "FAIL: log/ dir missing"; exit 1; }
+[ -f "$OUT/out/DANTE_TIR_final.gff3" ]    || { echo "FAIL: DANTE_TIR_final.gff3 missing"; exit 1; }
+[ -f "$OUT/out/DANTE_TIR_final.fasta" ]   || { echo "FAIL: DANTE_TIR_final.fasta missing"; exit 1; }
+[ -f "$OUT/out/TIR_classification_summary.txt" ] || \
+  { echo "FAIL: TIR_classification_summary.txt missing"; exit 1; }
+grep -q '^##gff-version 3' "$OUT/out/DANTE_TIR_final.gff3" || \
+  { echo "FAIL: DANTE_TIR_final.gff3 missing gff-version header"; exit 1; }
+N=$(grep -c -v '^#' "$OUT/out/DANTE_TIR_final.gff3" || true)
+[ "$N" -eq 0 ] || { echo "FAIL: smoke unexpectedly detected $N TIRs"; exit 1; }
 
 echo
 echo "smoke PASSED"
