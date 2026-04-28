@@ -1,1 +1,24 @@
 /old/
+/old_stuff/
+/issues/
+
+# Recipe version file is copied by CI; never commit a stale copy.
+/conda/dante_tir/version.py
+
+# Local-only working trees and IDE config.
+/tmp/
+/test2/
+/.idea/
+/__pycache__/
+*.pyc
+
+# Local-only test data — slices live under tests/data/, not here.
+/test-data/
+
+# Local-only working files.
+/CLAUDE.md
+/MAX_CLASS_SIZE_PLAN.md
+/conda_release_migration_playbook.md
+/hermit/
+/benchmark/
+/testing.md

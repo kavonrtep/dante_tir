@@ -36,6 +36,11 @@ Using conda:
 conda install -c conda-forge -c r -c bioconda -c petrnovak  dante_tir
 ```
 
+The `petrnovak` channel package is built from this repository's release
+tags by `.github/workflows/conda-release.yml` and uploaded to
+[anaconda.org/petrnovak/dante_tir](https://anaconda.org/petrnovak/dante_tir).
+The recipe lives at `conda/dante_tir/`.
+
 ## Usage
 
 ```
