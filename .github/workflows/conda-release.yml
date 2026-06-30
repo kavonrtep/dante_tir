@@ -40,7 +40,7 @@ jobs:
           # anaconda-client's binstar_client still imports pkg_resources
           # which setuptools 81.0.0 removed. Pin setuptools<81 (this is
           # the upstream-recommended workaround).
-          mamba install -y conda-build boa anaconda-client "setuptools<81"
+          mamba install -y conda-build anaconda-client "setuptools<81"
           mamba install -y --file requirements.txt
 
       - name: Long test (release gate)
@@ -58,7 +58,9 @@ jobs:
       - name: Build conda package
         run: |
           mkdir -p build_out
-          conda mambabuild -c conda-forge -c r -c bioconda -c petrnovak \
+          # conda-build now uses the libmamba solver directly; the old
+          # `conda mambabuild` (boa) entry point was removed upstream.
+          conda build -c conda-forge -c r -c bioconda -c petrnovak \
             --output-folder build_out \
             conda/dante_tir
 
