@@ -42,6 +42,8 @@ jobs:
           # the upstream-recommended workaround).
           mamba install -y conda-build anaconda-client "setuptools<81"
           mamba install -y --file requirements.txt
+          which conda-build
+          conda-build --version
 
       - name: Long test (release gate)
         run: ./tests.sh long
@@ -58,9 +60,10 @@ jobs:
       - name: Build conda package
         run: |
           mkdir -p build_out
-          # conda-build now uses the libmamba solver directly; the old
-          # `conda mambabuild` (boa) entry point was removed upstream.
-          conda build -c conda-forge -c r -c bioconda -c petrnovak \
+          # Use the standalone `conda-build` executable. The `conda build`
+          # subcommand is not registered with the base `conda` on PATH in
+          # this runner; `conda mambabuild` (boa) was removed upstream.
+          conda-build -c conda-forge -c r -c bioconda -c petrnovak \
             --output-folder build_out \
             conda/dante_tir
 
