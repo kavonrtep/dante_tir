@@ -163,14 +163,14 @@ for (i in names(g_split)) {
     logo_truncated <- ncol(t5) > max_logo_pos || ncol(t3) > max_logo_pos
     png(logo_name, height = 800, width = 100 + n_pos * 50)
     par(mfrow = c(2, 1))
-    plot.logo(t(t3_plot))
-    axis(side = 1, at = 1:n_pos + 0.5, labels = 1:n_pos, tick = FALSE)
-    label3 <- if (logo_truncated) paste0("3' TIR (first ", ncol(t3_plot), " of ", ncol(t3), " bp)") else "3' TIR"
-    mtext(label3, cex = 2, adj = 1)
     plot.logo(t(t5_plot))
     axis(side = 1, at = 1:n_pos + 0.5, labels = 1:n_pos, tick = FALSE)
     label5 <- if (logo_truncated) paste0("5' TIR (first ", ncol(t5_plot), " of ", ncol(t5), " bp)") else "5' TIR"
     mtext(label5, cex = 2, adj = 1)
+    plot.logo(t(t3_plot))
+    axis(side = 1, at = 1:n_pos + 0.5, labels = 1:n_pos, tick = FALSE)
+    label3 <- if (logo_truncated) paste0("3' TIR (first ", ncol(t3_plot), " of ", ncol(t3), " bp)") else "3' TIR"
+    mtext(label3, cex = 2, adj = 1)
     dev.off()
 
     t3aln <- DNAMultipleAlignment(make_seq_equal_width(tir3))

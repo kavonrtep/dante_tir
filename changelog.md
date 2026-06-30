@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6 — 2026-06-30
+
+- `dante_tir_summary.R`: reorder the TIR consensus logo figure in the HTML
+  report so the 5' TIR is shown first (top panel) and the 3' TIR second
+  (bottom panel).
+
 ## 0.2.5 — 2026-04-28
 
 CI / release-plumbing migration with a small batch of robustness fixes.
