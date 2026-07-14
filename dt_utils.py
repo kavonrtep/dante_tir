@@ -721,7 +721,29 @@ def save_gff3_dict_to_file(gff3_dict_list: Dict[str, List[Gff3Feature]], gff3_fi
             for gff in gff3_dict_list[cls]:
                 f.write(str(gff))
 
-def extract_flanking_regions(genome: Dict[str, str],
+def fasta_record_generator(fasta_file: str):
+    """Yield ``(name, sequence)`` one FASTA record at a time.
+
+    Only the current record is held in memory, so peak usage is the largest
+    single sequence rather than the whole assembly. ``name`` is the header up to
+    the first whitespace (matching :func:`fasta_to_dict`).
+    """
+    name = None
+    chunks: List[str] = []
+    with open(fasta_file, 'r') as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if name is not None:
+                    yield name, "".join(chunks)
+                name = line[1:].split()[0]
+                chunks = []
+            else:
+                chunks.append(line.strip())
+        if name is not None:
+            yield name, "".join(chunks)
+
+
+def extract_flanking_regions(fasta_file: str,
                              tir_domains: Dict[str, List[Gff3Feature]]
                              ) -> Tuple[
     Dict[str, Dict[int, str]],
@@ -731,62 +753,81 @@ def extract_flanking_regions(genome: Dict[str, str],
 
     """
     Extract flanking regions of TIR domains
-    :param genome:
+
+    :param fasta_file: path to the genome FASTA. It is streamed one sequence at a
+        time (not loaded whole via fasta_to_dict), so peak memory is the largest
+        single sequence, not the whole assembly — the latter OOMs on large
+        genomes while only ~6 kb flanks per domain are ever needed.
     :param tir_domains:
     :return: downstream and upstream sequences for each TIR domain
     :return: table with coordinates of donwstream and upstream sequences relative genome
 
     If sequence is on the negative strand,  sequences are reverse complemented
     """
-    upstream_seq = {}
-    downstream_seq = {}
-    coords = {}
+    upstream_seq: Dict[str, Dict[str, str]] = {cls: {} for cls in tir_domains}
+    downstream_seq: Dict[str, Dict[str, str]] = {cls: {} for cls in tir_domains}
+    coords: Dict[str, Dict[str, List[int]]] = {cls: {} for cls in tir_domains}
     offset = 6000
     offset2 = 300
+    # Group domains by seqid so each streamed sequence is processed in one pass.
+    domains_by_seqid: Dict[str, List[Tuple[str, Gff3Feature]]] = {}
     for cls in tir_domains:
-        coords[cls] = {}
-        upstream_seq[cls] = {}
-        downstream_seq[cls] = {}
         for gff in tir_domains[cls]:
+            domains_by_seqid.setdefault(gff.seqid, []).append((cls, gff))
+    # (cls, ID) -> (upstream, downstream_rc, coord); assembled in original order below.
+    computed: Dict[Tuple[str, str], Tuple[str, str, List[int]]] = {}
+    for seqid, seq in fasta_record_generator(fasta_file):
+        domains = domains_by_seqid.get(seqid)
+        if not domains:
+            continue
+        for cls, gff in domains:
             if gff.strand == '+':
                 u_s = max(0, gff.start - offset)
-                upstream = genome[gff.seqid][u_s:gff.start + offset2]
-                downstream = genome[gff.seqid][gff.end - offset2:gff.end + offset]
+                upstream = seq[u_s:gff.start + offset2]
+                downstream = seq[gff.end - offset2:gff.end + offset]
                 # coordinates could be out of range - adjust to sequence length
                 offset_u_adjusted = len(upstream) - offset2
                 offset_d_adjusted = len(downstream) - offset2
-                coords[cls][gff.attributes_dict['ID']] = [
+                coord = [
                     gff.seqid,
                     gff.start - offset_u_adjusted,
                     gff.start + offset2,
                     gff.end - offset2,
                     gff.end + offset_d_adjusted,
                     gff.strand]
-
             else:
                 d_s = max(0, gff.start - offset)
                 upstream = reverse_complement(
-                        genome[gff.seqid][gff.end - offset2:gff.end + offset]
+                        seq[gff.end - offset2:gff.end + offset]
                         )
                 downstream = reverse_complement(
-                        genome[gff.seqid][d_s:gff.start + offset2]
+                        seq[d_s:gff.start + offset2]
                         )
                 # coordinates could be out of range - adjust to sequence length
                 offset_u_adjusted = len(upstream) - offset2
                 offset_d_adjusted = len(downstream) - offset2
-
-                coords[cls][gff.attributes_dict['ID']] = [
+                coord = [
                     gff.seqid,
                     gff.end - offset2,
                     gff.end + offset_u_adjusted,
                     gff.start - offset_d_adjusted,
                     gff.start + offset2,
                     gff.strand]
-
+            # to make analysis easier, downstream sequence is reverse complemented
+            # - insertion site will be on 5' end
+            computed[(cls, gff.attributes_dict['ID'])] = (
+                upstream, reverse_complement(downstream), coord)
+    # Assemble in the original (class, domain) order for output stability.
+    for cls in tir_domains:
+        for gff in tir_domains[cls]:
             ID = gff.attributes_dict['ID']
+            entry = computed.get((cls, ID))
+            if entry is None:
+                continue
+            upstream, downstream_rc, coord = entry
             upstream_seq[cls][ID] = upstream
-            # to make analysis easier, downstream sequence is reverse complemented - insertions site will be on 5' end
-            downstream_seq[cls][ID] = reverse_complement(downstream)
+            downstream_seq[cls][ID] = downstream_rc
+            coords[cls][ID] = coord
 
     return downstream_seq, upstream_seq, coords
 

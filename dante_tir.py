@@ -136,14 +136,14 @@ def main():
         dt.save_grouping_info(aa_sequence_groups, aa_mmseqs2_output_dirs)
         print(" done")
 
-    # Read FASTA file with genome assembly
-    genome = dt.fasta_to_dict(args.fasta)
-
     # extract sequence for each protein domain including upstream and downstream
     # use strand information to extract upstream and downstream, if strand is
     # negative, then upstream is downstream and vice versa, for negative
-    # reverse complement the sequence
-    downstream_seq, upstream_seq, coords = dt.extract_flanking_regions(genome,
+    # reverse complement the sequence.
+    # The genome is streamed one sequence at a time inside extract_flanking_regions
+    # (not loaded whole via fasta_to_dict) to avoid holding the entire assembly in
+    # memory, which OOMs on large genomes.
+    downstream_seq, upstream_seq, coords = dt.extract_flanking_regions(args.fasta,
                                                                        tir_domains)
     # export downstream and upstream sequences to files, one file for each upstream,
     # downstream and classification
