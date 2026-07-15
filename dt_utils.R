@@ -838,45 +838,74 @@ aln_score <- function(x,y){
   return(aln)
 }
 
+# Build an awk program that reproduces filter_blast3()'s row predicates on a
+# BLAST outfmt-6 stream and emits only the three columns get_coverage_from_blast()
+# needs: saccver, sstart, send. Column indices follow outfmt 6:
+#   1 qaccver 2 saccver 3 pident 4 length 5 mismatch 6 gapopen
+#   7 qstart  8 qend    9 sstart 10 send  11 evalue  12 bitscore
+# This is kept in lock-step with filter_blast3(); the bitscore ordering there is
+# intentionally omitted because coverage() is order-invariant, so it cannot
+# change the resulting switch points. See tests/test_blast_reduce.R for the
+# equivalence proof.
+blast3_reduce_awk <- function(min_length, min_identity, max_evalue = 1e-5) {
+  sprintf(
+    paste0("($11+0) < %g && ($4+0) > %g && ($3+0) > %g && ($9+0) > 12 && ",
+           "($9+0) < ($10+0) { q=$1; gsub(/_+/,\"\",q); ",
+           "if (q != $2) print $2, $9, $10 }"),
+    max_evalue, min_length, min_identity)
+}
+
 run_blast_tir_analysis <- function(
     query_db,                   # e.g., upstream_db or downstream_db
-    out_blast_file,             # e.g., blast_upstream or blast_downstream
+    out_blast_file,             # reduced (filtered, 3-column) output file
     blast_db,                   # same as query_db in your example
     swt_pt_fun,                 # swt_pt_fun[[cls]]
-    filter_fun,                 # e.g., filter_blast3
+    filter_fun,                 # kept for reference; predicates are applied by
+                                # blast3_reduce_awk() in the stream (see below)
     coverage_fun,               # e.g., get_coverage_from_blast
     evalue          = "1e-10",
     max_target_seqs = 500000L,
     strand          = "plus",
     min_length      = 150,
     min_identity    = 80,
+    max_evalue      = 1e-5,     # matches filter_blast3()'s default
     mc.cores        = 1
 ) {
-  # Run BLAST if output file doesn't exist
+  # Run BLAST if the reduced output file doesn't already exist. The all-vs-all
+  # self-BLAST used here can produce a multi-hundred-GB tabular table on large,
+  # high-copy genomes, which cannot be read into R (> 2^31 elements → "long
+  # vectors not supported yet"). We therefore never materialize the full table:
+  # blastn is streamed through awk that applies filter_blast3()'s predicates and
+  # keeps only saccver/sstart/send, so both the on-disk file and R's in-memory
+  # frame are reduced by orders of magnitude.
   if (!file.exists(out_blast_file)) {
-    system(
-      paste(
-        "blastn -query", query_db,
-        "-db", blast_db,
-        "-out", out_blast_file,
-        "-outfmt 6",
-        paste0("-evalue ", evalue),
-        paste0("-max_target_seqs ", max_target_seqs),
-        paste0("-strand ", strand),
-        paste0("-num_threads ", mc.cores)
-#        ," -word_size 7 -gapextend 1 -gapopen 2 -reward 1 -penalty -1"
-      )
-    )
+    awk_prog <- blast3_reduce_awk(min_length, min_identity, max_evalue)
+    cmd <- paste0(
+      "set -o pipefail; ",
+      "blastn -query ", shQuote(query_db),
+      " -db ", shQuote(blast_db),
+      " -outfmt 6",
+      " -evalue ", evalue,
+      " -max_target_seqs ", format(max_target_seqs, scientific = FALSE),
+      " -strand ", strand,
+      " -num_threads ", mc.cores,
+      " | awk ", shQuote(awk_prog),
+      " > ", shQuote(out_blast_file))
+    status <- system2("bash", c("-c", shQuote(cmd)))
+    if (!identical(as.integer(status), 0L)) {
+      stop("BLAST/awk reduction failed for ", out_blast_file,
+           " (exit status ", status, ")")
+    }
   }
-  # Read in the BLAST results
-  blast_df <- read.table(out_blast_file, header = FALSE, sep = "\t",
-                         col.names = c("qaccver", "saccver", "pident", "length",
-                                       "mismatch", "gapopen",
-                                       "qstart", "qend", "sstart", "send",
-                                       "evalue", "bitscore"))
 
-  # Filter the BLAST results
-  blast_df <- filter_fun(blast_df, min_length = min_length, min_identity = min_identity)
+  # An empty reduced file means no hit passed the filter for this class.
+  if (!file.exists(out_blast_file) || file.info(out_blast_file)$size == 0) {
+    return(list(blast_df = NULL, blast_cov = list(), cp_vals = NULL))
+  }
+
+  # Read the reduced BLAST results (already filtered and projected by awk).
+  blast_df <- read.table(out_blast_file, header = FALSE,
+                         col.names = c("saccver", "sstart", "send"))
   # Compute coverage
   blast_cov <- coverage_fun(blast_df)
   # Compute the switch points in parallel
@@ -1630,8 +1659,10 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
     upstream_db   <- upstream_regions_file[[cls]]
     downstream_db <- downstream_regions_file[[cls]]
-    blast_upstream   <- file.path(output, "blastn", paste0(cls, "_upstream3.blastn"))
-    blast_downstream <- file.path(output, "blastn", paste0(cls, "_downstream3.blastn"))
+    # Reduced (filtered, 3-column) BLAST outputs — see run_blast_tir_analysis().
+    # A distinct name avoids picking up a full ".blastn" table left by older runs.
+    blast_upstream   <- file.path(output, "blastn", paste0(cls, "_upstream3.filtered.tsv"))
+    blast_downstream <- file.path(output, "blastn", paste0(cls, "_downstream3.filtered.tsv"))
     dir.create(file.path(output, "blastn"), showWarnings = FALSE)
 
     # Run BLAST analysis for upstream and downstream.

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.7 — 2026-07-15
+
+Memory-usage fixes plus CI plumbing.
+
+- `extract_flanking_regions` no longer loads the whole genome into RAM
+  (previously ~genome_bp, causing OOM on large assemblies such as a 90 Gbp
+  genome). It now takes the FASTA path and streams one sequence at a time
+  via a new `fasta_record_generator`, so peak memory is the largest single
+  sequence rather than the whole assembly. Output is byte-identical to the
+  previous dict-based logic.
+- Round 3 no longer reads the full self-BLAST table into R. On large,
+  high-copy genomes the all-vs-all self-BLAST can exceed hundreds of GB, and
+  `read.table` aborted with `long vectors not supported yet` (R's 2^31-element
+  limit) before any element was called. `run_blast_tir_analysis` now streams
+  `blastn` through an `awk` filter (`blast3_reduce_awk`) that reproduces
+  `filter_blast3`'s predicates and keeps only the `saccver/sstart/send` columns
+  coverage needs, so the full table is never written to disk nor loaded into R.
+  Results are unchanged — verified identical at the filter, coverage, switch-
+  point, and final-GFF3 level. Round-3 BLAST outputs are now named
+  `*_upstream3.filtered.tsv` / `*_downstream3.filtered.tsv`.
+- Add `tests/test_blast_reduce.R` (run from `tests/smoke.sh`) proving the
+  streamed reduction is identical to the previous read.table/filter path across
+  predicate edge cases and a real self-BLAST.
+- Add `tests/test_extract_flanking_regions.py` (plus `tests/unit.sh` and a
+  `unit` level in `tests.sh`) verifying the streaming output matches the
+  original logic across both strands, window clamping, and line-wrapped
+  multi-sequence FASTA.
+- CI: switch the conda-release workflow from the removed `conda mambabuild`
+  to the standalone `conda-build` executable.
+
 ## 0.2.6 — 2026-06-30
 
 - `dante_tir_summary.R`: reorder the TIR consensus logo figure in the HTML
