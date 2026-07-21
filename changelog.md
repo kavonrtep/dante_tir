@@ -1,15 +1,9 @@
 # Changelog
 
-## 0.2.7 — 2026-07-15
+## 0.2.8 — 2026-07-21
 
-Memory-usage fixes plus CI plumbing.
+Round-3 memory fix plus a release guard.
 
-- `extract_flanking_regions` no longer loads the whole genome into RAM
-  (previously ~genome_bp, causing OOM on large assemblies such as a 90 Gbp
-  genome). It now takes the FASTA path and streams one sequence at a time
-  via a new `fasta_record_generator`, so peak memory is the largest single
-  sequence rather than the whole assembly. Output is byte-identical to the
-  previous dict-based logic.
 - Round 3 no longer reads the full self-BLAST table into R. On large,
   high-copy genomes the all-vs-all self-BLAST can exceed hundreds of GB, and
   `read.table` aborted with `long vectors not supported yet` (R's 2^31-element
@@ -23,6 +17,22 @@ Memory-usage fixes plus CI plumbing.
 - Add `tests/test_blast_reduce.R` (run from `tests/smoke.sh`) proving the
   streamed reduction is identical to the previous read.table/filter path across
   predicate edge cases and a real self-BLAST.
+- Release plumbing: add `dev_scripts/check_release_version.sh`, a guard that
+  refuses to (re)release a version already published on the conda channel (and,
+  with `--require-untagged`, one that already has a local git tag). Wired into
+  `conda-release.yml` as a fail-fast preflight so a duplicate version bump can
+  no longer waste a full build and then fail at upload.
+
+## 0.2.7 — 2026-07-15
+
+Memory-usage fix plus CI plumbing.
+
+- `extract_flanking_regions` no longer loads the whole genome into RAM
+  (previously ~genome_bp, causing OOM on large assemblies such as a 90 Gbp
+  genome). It now takes the FASTA path and streams one sequence at a time
+  via a new `fasta_record_generator`, so peak memory is the largest single
+  sequence rather than the whole assembly. Output is byte-identical to the
+  previous dict-based logic.
 - Add `tests/test_extract_flanking_regions.py` (plus `tests/unit.sh` and a
   `unit` level in `tests.sh`) verifying the streaming output matches the
   original logic across both strands, window clamping, and line-wrapped

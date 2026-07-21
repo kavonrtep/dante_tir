@@ -24,6 +24,13 @@ jobs:
           fi
           echo "tag matches version.py: $V"
 
+      - name: Guard against re-releasing an existing version
+        # anaconda.org rejects re-uploading an existing version, which would
+        # otherwise only surface after a full (slow) build. Fail fast here.
+        # The tag necessarily exists at this point, so the git-tag check is
+        # skipped (no --require-untagged); only the conda channel is checked.
+        run: ./dev_scripts/check_release_version.sh
+
       - name: Set up miniforge / mamba
         uses: conda-incubator/setup-miniconda@v3
         with:
