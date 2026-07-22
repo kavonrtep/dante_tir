@@ -27,6 +27,10 @@ echo "=== Round-3 BLAST-reduction identity (streamed awk == old read.table path)
 Rscript "$ROOT/tests/test_blast_reduce.R"
 
 echo
+echo "=== release-version guard ==="
+bash "$ROOT/tests/test_check_release_version.sh"
+
+echo
 echo "=== dante_tir on smoke subset (~ 15 s, expect 0 TIRs detected) ==="
 ./dante_tir.py -g "$DATA/smoke.gff3" -f "$DATA/smoke.fasta" \
                -o "$OUT/out" -c "$NCPU"

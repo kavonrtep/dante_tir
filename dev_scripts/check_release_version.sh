@@ -26,8 +26,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 require_untagged=0
 [ "${1:-}" = "--require-untagged" ] && require_untagged=1
 
-V=$(python3 -c "exec(open('$ROOT/version.py').read()); print(__version__)")
-echo "version.py = $V"
+# RELEASE_VERSION overrides version.py (used by tests to probe the guard
+# without touching the real version.py).
+if [ -n "${RELEASE_VERSION:-}" ]; then
+  V="$RELEASE_VERSION"
+  echo "version (RELEASE_VERSION override) = $V"
+else
+  V=$(python3 -c "exec(open('$ROOT/version.py').read()); print(__version__)")
+  echo "version.py = $V"
+fi
 
 fail=0
 
