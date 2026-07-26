@@ -27,6 +27,10 @@ echo "=== Round-3 switch-point identity (blastn | blast_cp.py == old R path) ===
 Rscript "$ROOT/tests/test_round3_cp.R"
 
 echo
+echo "=== genome access: FaFile == whole-genome DNAStringSet ==="
+Rscript "$ROOT/tests/test_genome_access.R"
+
+echo
 echo "=== release-version guard ==="
 bash "$ROOT/tests/test_check_release_version.sh"
 

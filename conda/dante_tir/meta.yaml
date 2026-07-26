@@ -32,6 +32,7 @@ requirements:
     - r-rbeast
     - bioconductor-biostrings
     - bioconductor-bsgenome
+    - bioconductor-rsamtools
     - bioconductor-rtracklayer
 
 test:

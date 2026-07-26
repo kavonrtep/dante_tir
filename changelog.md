@@ -47,6 +47,18 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   sampled query FASTA). Thread count does not affect results either: the
   coverage profile is an order-independent integer accumulation, verified
   byte-identical at `-num_threads 1` vs `8` on real data.
+- Stop loading the whole genome into R. `detect_tirs.R` and
+  `cluster_tir_sequences` both did `readDNAStringSet(genome)` to pull out a few
+  thousand short TIR ranges; a `DNAStringSet` costs ~1 byte per base, so for
+  run-000129's 94.3 Gbp assembly that is ~94 GB of RAM, twice. Neither call had
+  ever been reached on that genome because Round 3 failed first. Both now use
+  `Rsamtools::FaFile` random access through the `.fai`, which reads only the
+  requested ranges (`genome_fa_handle`, which indexes the genome if needed and
+  fails loudly if it cannot). Output is unchanged: `tests/test_genome_access.R`
+  asserts the two paths return identical sequences including
+  reverse-complementing of minus-strand ranges, and `tests.sh short` produces a
+  byte-identical `DANTE_TIR_final.fasta`. `bioconductor-rsamtools` is now a
+  declared dependency (it arrived via BSgenome before).
 - Known issue documented, not changed: `find_switch_point_from_blast_coverage3`
   (used for EnSpm/CACTA) reads its QC thresholds 200 bp before the switch point
   it detected. `blast_cp.py` reproduces the behaviour deliberately; see

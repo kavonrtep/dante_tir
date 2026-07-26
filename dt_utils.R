@@ -934,6 +934,27 @@ fasta_ids <- function(fasta) {
   sub("\\s.*", "", fasta.index(fasta)$desc)
 }
 
+# Random-access handle to a genome FASTA, for getSeq(handle, granges).
+#
+# Round 4 and the final sequence extraction pull a few thousand short ranges
+# out of the genome. readDNAStringSet() would hold the whole assembly in RAM at
+# ~1 byte per base -- ~94 GB for run-000129's 94.3 Gbp genome -- so the step
+# was a wall waiting to be hit once Round 3 stopped failing first. An FaFile
+# reads only the requested ranges through the .fai index.
+#
+# getSeq() on an FaFile and on a DNAStringSet agree, strand handling included;
+# tests/test_genome_access.R asserts that.
+genome_fa_handle <- function(genome_file) {
+  if (!file.exists(paste0(genome_file, ".fai"))) {
+    message("Indexing ", basename(genome_file), " for random access...")
+    tryCatch(Rsamtools::indexFa(genome_file),
+             error = function(e)
+               stop("cannot index ", genome_file, ": ", conditionMessage(e),
+                    "\n  (a writable .fai next to the genome is required)"))
+  }
+  Rsamtools::FaFile(genome_file)
+}
+
 # Copy the records at `idx` (positions in file order) to out_fa, reading only
 # those records rather than the whole file.
 write_fasta_subset <- function(fasta, idx, out_fa) {
@@ -1189,11 +1210,8 @@ prepare_granges <- function(res_df, tir_flank_coordinates, iter) {
 
 
 cluster_tir_sequences <- function(genome_file, gr_fin, output, threads) {
-  # Read the genome sequences.
-
-  genome <- readDNAStringSet(genome_file)
-  names(genome) <- gsub(" .*", "", names(genome))
   # Extract TIR sequences from gr_fin.
+  genome <- genome_fa_handle(genome_file)
   tir_seqs <- getSeq(genome, gr_fin)
   names(tir_seqs) <- paste0(
     gsub("Class_II_Subclass_1_TIR_", "", gr_fin$ID),

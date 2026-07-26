@@ -148,8 +148,7 @@ tryCatch({
   save.image(paste0(opt$output, "/DANTE_TIR.RData"))
 
 
-  genome <- readDNAStringSet(opt$genome)
-  names(genome) <- sub(" .*", "", names(genome))
+  genome <- genome_fa_handle(opt$genome)
   tir_seqs <- getSeq(genome, gr_fin)
   names(tir_seqs) <- paste0(gsub("Class_II_Subclass_1_TIR_", "", gr_fin$ID),
                             "#",
