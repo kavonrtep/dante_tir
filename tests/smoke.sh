@@ -23,8 +23,8 @@ echo "=== CLI checks ==="
 ./dante_tir_summary.R --help > /dev/null
 
 echo
-echo "=== Round-3 BLAST-reduction identity (streamed awk == old read.table path) ==="
-Rscript "$ROOT/tests/test_blast_reduce.R"
+echo "=== Round-3 switch-point identity (blastn | blast_cp.py == old R path) ==="
+Rscript "$ROOT/tests/test_round3_cp.R"
 
 echo
 echo "=== release-version guard ==="

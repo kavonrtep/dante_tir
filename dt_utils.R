@@ -359,6 +359,9 @@ filter_blast2 <- function (blast_df, min_length = 30, max_evalue = 1e-5, min_ide
   blast_df
 }
 
+# Reference implementation. Production Round 3 applies these predicates and
+# builds the coverage profiles inside blast_cp.py; the R versions below are
+# kept as the equivalence reference asserted by tests/test_round3_cp.R.
 filter_blast3 <- function (blast_df, min_length = 30, max_evalue = 1e-5, min_identity = 80){
   f2 <- blast_df$evalue < max_evalue
   f3 <- blast_df$length > min_length
@@ -413,6 +416,7 @@ get_cp_from_blast4 <- function(blast_df, upstream=TRUE){
   return(cp_df)
 }
 
+# Reference implementation -- see the note above filter_blast3().
 get_coverage_from_blast <- function(bl) {
   # spit by saccver
   bl_parts <- split(bl, bl$saccver)
@@ -525,6 +529,8 @@ find_switch_point_from_blast_coverage3 <- function (cvrg){
   return(cp)
 }
 
+# Reference implementation -- see the note above filter_blast3().
+# swt_pt_method() is the production counterpart and must stay in sync.
 swt_pt_function <- function(tir_class){
   defined_functions <- list(
   "Class_II_Subclass_1_TIR_Tc1_Mariner" = find_switch_point_from_blast_coverage2,
@@ -838,79 +844,107 @@ aln_score <- function(x,y){
   return(aln)
 }
 
-# Build an awk program that reproduces filter_blast3()'s row predicates on a
-# BLAST outfmt-6 stream and emits only the three columns get_coverage_from_blast()
-# needs: saccver, sstart, send. Column indices follow outfmt 6:
-#   1 qaccver 2 saccver 3 pident 4 length 5 mismatch 6 gapopen
-#   7 qstart  8 qend    9 sstart 10 send  11 evalue  12 bitscore
-# This is kept in lock-step with filter_blast3(); the bitscore ordering there is
-# intentionally omitted because coverage() is order-invariant, so it cannot
-# change the resulting switch points. See tests/test_blast_reduce.R for the
-# equivalence proof.
-blast3_reduce_awk <- function(min_length, min_identity, max_evalue = 1e-5) {
-  sprintf(
-    paste0("($11+0) < %g && ($4+0) > %g && ($3+0) > %g && ($9+0) > 12 && ",
-           "($9+0) < ($10+0) { q=$1; gsub(/_+/,\"\",q); ",
-           "if (q != $2) print $2, $9, $10 }"),
-    max_evalue, min_length, min_identity)
+# Directory holding this file, so sibling helper scripts (blast_cp.py) can be
+# located both from an installed conda package (share/dante_tir/) and from a
+# source checkout. source() records the sourced path in the calling frame;
+# fall back to the running Rscript, then to the working directory.
+DT_UTILS_DIR <- local({
+  for (i in rev(seq_len(sys.nframe()))) {
+    ofile <- sys.frames()[[i]]$ofile
+    if (!is.null(ofile)) return(dirname(normalizePath(ofile)))
+  }
+  file_arg <- grep("--file=", commandArgs(FALSE), value = TRUE)
+  if (length(file_arg)) {
+    return(dirname(normalizePath(sub("--file=", "", file_arg[1]))))
+  }
+  normalizePath(getwd())
+})
+
+blast_cp_script <- function() {
+  path <- getOption("dante_tir.blast_cp", file.path(DT_UTILS_DIR, "blast_cp.py"))
+  if (!file.exists(path)) {
+    stop("blast_cp.py not found (looked for ", path, ")")
+  }
+  path
 }
+
+# Switch-point method name understood by blast_cp.py, mirroring
+# swt_pt_function() which maps the same classes to the R implementations.
+swt_pt_method <- function(tir_class) {
+  if (identical(tir_class, "Class_II_Subclass_1_TIR_EnSpm_CACTA")) "cumsum" else "win200"
+}
+
+# Columns Round 3 asks blastn for: exactly what filter_blast3()'s predicates
+# and the coverage profile need. blastn's own 12-column default is roughly
+# twice the text volume, all of it discarded.
+BLAST_CP_COLUMNS <- "qaccver saccver pident length sstart send"
 
 run_blast_tir_analysis <- function(
     query_db,                   # e.g., upstream_db or downstream_db
-    out_blast_file,             # reduced (filtered, 3-column) output file
+    out_cp_file,                # small "id<TAB>cp" table written by blast_cp.py
     blast_db,                   # same as query_db in your example
-    swt_pt_fun,                 # swt_pt_fun[[cls]]
-    filter_fun,                 # kept for reference; predicates are applied by
-                                # blast3_reduce_awk() in the stream (see below)
-    coverage_fun,               # e.g., get_coverage_from_blast
+    method,                     # swt_pt_method(cls): "win200" or "cumsum"
     evalue          = "1e-10",
     max_target_seqs = 500000L,
     strand          = "plus",
     min_length      = 150,
     min_identity    = 80,
     max_evalue      = 1e-5,     # matches filter_blast3()'s default
-    mc.cores        = 1
+    mc.cores        = 1,
+    keep_hits       = NULL      # optional path for the surviving hit rows
 ) {
-  # Run BLAST if the reduced output file doesn't already exist. The all-vs-all
-  # self-BLAST used here can produce a multi-hundred-GB tabular table on large,
-  # high-copy genomes, which cannot be read into R (> 2^31 elements → "long
-  # vectors not supported yet"). We therefore never materialize the full table:
-  # blastn is streamed through awk that applies filter_blast3()'s predicates and
-  # keeps only saccver/sstart/send, so both the on-disk file and R's in-memory
-  # frame are reduced by orders of magnitude.
-  if (!file.exists(out_blast_file)) {
-    awk_prog <- blast3_reduce_awk(min_length, min_identity, max_evalue)
+  # The all-vs-all self-BLAST here produces a table that is hopeless to
+  # materialize on large, high-copy genomes: for a 89 Gb genome with 168k
+  # EnSpm/CACTA domains it was 2.5e9 rows (41.5 GB) even *after* filtering, far
+  # past R's 2^31-element vector limit. Nothing downstream wants the table --
+  # round3() uses only cp_vals -- so blastn is streamed straight into
+  # blast_cp.py, which applies filter_blast3()'s predicates, folds each hit
+  # into a per-subject coverage profile and returns just the switch points.
+  # See docs/round3_scaling.md.
+  #
+  # -evalue is stricter than max_evalue, so filter_blast3()'s evalue predicate
+  # cannot fire; the column is therefore not requested at all.
+  stopifnot(as.numeric(evalue) <= max_evalue)
+
+  if (!file.exists(out_cp_file)) {
     cmd <- paste0(
       "set -o pipefail; ",
       "blastn -query ", shQuote(query_db),
       " -db ", shQuote(blast_db),
-      " -outfmt 6",
+      " -outfmt ", shQuote(paste("6", BLAST_CP_COLUMNS)),
       " -evalue ", evalue,
       " -max_target_seqs ", format(max_target_seqs, scientific = FALSE),
       " -strand ", strand,
+      " -perc_identity ", min_identity,
       " -num_threads ", mc.cores,
-      " | awk ", shQuote(awk_prog),
-      " > ", shQuote(out_blast_file))
+      " | ", shQuote(blast_cp_script()),
+      " --subjects ", shQuote(blast_db),
+      " --method ", method,
+      " --columns ", shQuote(gsub(" ", ",", BLAST_CP_COLUMNS)),
+      " --min-length ", min_length,
+      " --min-identity ", min_identity,
+      if (is.null(keep_hits)) "" else paste0(" --keep-hits ", shQuote(keep_hits)),
+      " --out ", shQuote(paste0(out_cp_file, ".tmp")))
     status <- system2("bash", c("-c", shQuote(cmd)))
     if (!identical(as.integer(status), 0L)) {
-      stop("BLAST/awk reduction failed for ", out_blast_file,
+      unlink(paste0(out_cp_file, ".tmp"))
+      stop("BLAST/blast_cp.py failed for ", out_cp_file,
            " (exit status ", status, ")")
+    }
+    # Rename only on success so a killed run never looks like a cached result.
+    if (!file.rename(paste0(out_cp_file, ".tmp"), out_cp_file)) {
+      stop("could not create ", out_cp_file)
     }
   }
 
-  # An empty reduced file means no hit passed the filter for this class.
-  if (!file.exists(out_blast_file) || file.info(out_blast_file)$size == 0) {
-    return(list(blast_df = NULL, blast_cov = list(), cp_vals = NULL))
+  cp_df <- read.table(out_cp_file, header = TRUE, sep = "\t",
+                      colClasses = c("character", "numeric"),
+                      na.strings = "NA", stringsAsFactors = FALSE)
+  if (nrow(cp_df) == 0) {
+    return(list(cp_vals = NULL, cp_file = out_cp_file))
   }
-
-  # Read the reduced BLAST results (already filtered and projected by awk).
-  blast_df <- read.table(out_blast_file, header = FALSE,
-                         col.names = c("saccver", "sstart", "send"))
-  # Compute coverage
-  blast_cov <- coverage_fun(blast_df)
-  # Compute the switch points in parallel
-  cp_vals <- unlist(mclapply(blast_cov, FUN = swt_pt_fun, mc.cores = mc.cores))
-  return(list (blast_df = blast_df, blast_cov = blast_cov, cp_vals = cp_vals))
+  cp_vals <- setNames(cp_df$cp, cp_df$id)
+  return(list(cp_vals = cp_vals, cp_file = out_cp_file))
 }
 
 process_region_files <- function(file_list, side, mcmc_seed = 42, n_beast_iter = 1) {
@@ -1659,30 +1693,27 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
 
     upstream_db   <- upstream_regions_file[[cls]]
     downstream_db <- downstream_regions_file[[cls]]
-    # Reduced (filtered, 3-column) BLAST outputs — see run_blast_tir_analysis().
-    # A distinct name avoids picking up a full ".blastn" table left by older runs.
-    blast_upstream   <- file.path(output, "blastn", paste0(cls, "_upstream3.filtered.tsv"))
-    blast_downstream <- file.path(output, "blastn", paste0(cls, "_downstream3.filtered.tsv"))
+    # Switch-point tables (id + cp, one row per subject) — see
+    # run_blast_tir_analysis(). A distinct name avoids picking up a full
+    # ".blastn" table or a ".filtered.tsv" left by older runs.
+    cp_upstream   <- file.path(output, "blastn", paste0(cls, "_upstream3.cp.tsv"))
+    cp_downstream <- file.path(output, "blastn", paste0(cls, "_downstream3.cp.tsv"))
     dir.create(file.path(output, "blastn"), showWarnings = FALSE)
 
     # Run BLAST analysis for upstream and downstream.
     cp_detect_info_up <- run_blast_tir_analysis(
-      query_db       = upstream_db,
-      out_blast_file = blast_upstream,
-      blast_db       = upstream_db,
-      swt_pt_fun     = swt_pt_function(cls),
-      filter_fun     = filter_blast3,
-      coverage_fun   = get_coverage_from_blast,
-      mc.cores       = threads
+      query_db    = upstream_db,
+      out_cp_file = cp_upstream,
+      blast_db    = upstream_db,
+      method      = swt_pt_method(cls),
+      mc.cores    = threads
     )
     cp_detect_info_down <- run_blast_tir_analysis(
-      query_db       = downstream_db,
-      out_blast_file = blast_downstream,
-      blast_db       = downstream_db,
-      swt_pt_fun     = swt_pt_function(cls),
-      filter_fun     = filter_blast3,
-      coverage_fun   = get_coverage_from_blast,
-      mc.cores       = threads
+      query_db    = downstream_db,
+      out_cp_file = cp_downstream,
+      blast_db    = downstream_db,
+      method      = swt_pt_method(cls),
+      mc.cores    = threads
     )
 
     cp_up <- cp_detect_info_up$cp_vals

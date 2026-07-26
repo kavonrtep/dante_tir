@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+Round-3 scaling: the self-BLAST table is never parsed in R at all.
+
+- The `awk` reduction added in 0.2.7 kept the Round-3 table off the heap but
+  could not shrink it enough: on an 89 Gb genome with 168k EnSpm/CACTA domains
+  the *filtered* table was still 41.5 GB / 2.5e9 rows and `read.table` aborted
+  with `long vectors not supported yet`. The row count is intrinsic to an
+  all-vs-all self-BLAST, so no per-row filter can fix it.
+- `run_blast_tir_analysis` now streams `blastn` straight into `blast_cp.py`,
+  which applies `filter_blast3`'s predicates, folds each surviving hit into a
+  per-subject coverage profile and computes the switch points, returning only
+  the `id`/`cp` table Round 3 actually consumes. Nothing proportional to the
+  hit count is ever stored: memory is a dense int32 profile array
+  (`n_subjects x max_length`, 4.2 GB for the class above) and the BLAST stream
+  itself is discarded as it is read. Round-3 outputs are now
+  `*_upstream3.cp.tsv` / `*_downstream3.cp.tsv`.
+- Ask `blastn` for only the six columns the predicates need (it was formatting
+  twelve and `awk` discarded nine) and push the identity cut-off down into
+  `-perc_identity`. `filter_blast3`'s evalue predicate was already unreachable
+  behind `-evalue 1e-10` and is no longer evaluated.
+- Results are unchanged: `tests/test_round3_cp.R` (replacing
+  `tests/test_blast_reduce.R`) asserts the new path reproduces the R
+  implementation's switch points exactly, across predicate edge cases, random
+  coverage profiles for both switch-point methods, and a real self-BLAST.
+- New runtime dependency: `numpy`.
+- Known issue documented, not changed: `find_switch_point_from_blast_coverage3`
+  (used for EnSpm/CACTA) reads its QC thresholds 200 bp before the switch point
+  it detected. `blast_cp.py` reproduces the behaviour deliberately; see
+  `docs/round3_scaling.md` 8.1.
+
 - Fix a hang on large inputs: `cluster_aa_sequences_mmseqs2` and
   `make_blast_db` ran their child processes with `subprocess.check_call(...,
   stdout=PIPE, stderr=PIPE)`. `check_call` waits without ever reading those

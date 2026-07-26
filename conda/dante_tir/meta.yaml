@@ -24,6 +24,7 @@ build:
 requirements:
   run:
     - python >=3.6.0
+    - numpy
     - mmseqs2 >=14
     - blast
     - cap3
