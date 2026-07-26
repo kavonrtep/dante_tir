@@ -1020,8 +1020,11 @@ run_blast_tir_analysis <- function(
     min_support     = 30,       # sampled element-side coverage below which a
                                 # subject is re-resolved exactly (see below)
     seed            = 42,
-    keep_hits       = NULL      # optional path for the surviving hit rows
+    keep_hits       = NULL,     # optional path for the surviving hit rows
+    label           = NULL      # tag for log lines; directions run concurrently
+                                # and their messages interleave
 ) {
+  tag <- if (is.null(label)) "" else paste0(label, ": ")
   # The all-vs-all self-BLAST here produces a table that is hopeless to
   # materialize on large, high-copy genomes: for a 89 Gb genome with 168k
   # EnSpm/CACTA domains it was 2.5e9 rows (41.5 GB) even *after* filtering, far
@@ -1064,9 +1067,10 @@ run_blast_tir_analysis <- function(
       query_sample <- paste0(prefix, ".pass1.queries.fasta")
       write_fasta_subset(query_db, qi, query_sample)
       message(sprintf(
-        "  round3 sampling: %d of %d queries (scale %.2f), min_support %g, seed %d",
-        max_queries, n_query, scale, min_support, seed))
-      message(sprintf("  round3 sample fingerprint: %s", sample_fingerprint(qi)))
+        "  round3 %ssampling: %d of %d queries (scale %.2f), min_support %g, seed %d",
+        tag, max_queries, n_query, scale, min_support, seed))
+      message(sprintf("  round3 %ssample fingerprint: %s", tag,
+                      sample_fingerprint(qi)))
 
       cp1_file <- paste0(prefix, ".pass1.tsv")
       blast_cp_stream(query = query_sample, db = blast_db, subjects = blast_db,
@@ -1085,8 +1089,9 @@ run_blast_tir_analysis <- function(
       if (length(pass2_ids) == 0) {
         cp_all <- cp1
       } else {
-        message(sprintf("  round3 pass 2: resolving %d of %d subjects exactly",
-                        length(pass2_ids), length(resolved) + length(pass2_ids)))
+        message(sprintf("  round3 %spass 2: resolving %d of %d subjects exactly",
+                        tag, length(pass2_ids),
+                        length(resolved) + length(pass2_ids)))
         subj_ids <- fasta_ids(blast_db)
         subj_fa <- paste0(prefix, ".pass2.subjects.fasta")
         write_fasta_subset(blast_db, match(pass2_ids, subj_ids), subj_fa)
@@ -1875,27 +1880,48 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads,
     cp_downstream <- file.path(output, "blastn", paste0(cls, "_downstream3.cp.tsv"))
     dir.create(file.path(output, "blastn"), showWarnings = FALSE)
 
-    # Run BLAST analysis for upstream and downstream.
-    cp_detect_info_up <- run_blast_tir_analysis(
-      query_db    = upstream_db,
-      out_cp_file = cp_upstream,
-      blast_db    = upstream_db,
-      method      = swt_pt_method(cls),
-      mc.cores    = threads,
-      max_queries = max_queries,
-      min_support = min_support,
-      seed        = seed
-    )
-    cp_detect_info_down <- run_blast_tir_analysis(
-      query_db    = downstream_db,
-      out_cp_file = cp_downstream,
-      blast_db    = downstream_db,
-      method      = swt_pt_method(cls),
-      mc.cores    = threads,
-      max_queries = max_queries,
-      min_support = min_support,
-      seed        = seed
-    )
+    # The two directions are independent searches, and one blastn saturates at
+    # roughly a quarter of the threads it is given -- measured 24.7 of 96 on
+    # run-000129 and 6.1 of 14 locally, and -mt_mode 1 does not change that
+    # (same wall time, 7x the memory). So running the directions side by side
+    # with the threads split between them uses the machine far better than
+    # handing all of them to one search. Results are unaffected: the searches
+    # write separate files and the coverage profiles are order-independent
+    # integer accumulations.
+    directions <- list(
+      list(side = "upstream",   query = upstream_db,   out = cp_upstream),
+      list(side = "downstream", query = downstream_db, out = cp_downstream))
+    # Below 4 threads there is nothing to split, so stay sequential.
+    n_concurrent <- if (threads >= 4) length(directions) else 1L
+    per_job_threads <- max(1, threads %/% n_concurrent)
+    if (n_concurrent > 1) {
+      message(sprintf("  round3 %s: %d directions concurrently, %d threads each",
+                      cls, n_concurrent, per_job_threads))
+    }
+    cp_detect <- mclapply(directions, function(d) {
+      run_blast_tir_analysis(
+        query_db    = d$query,
+        out_cp_file = d$out,
+        blast_db    = d$query,
+        method      = swt_pt_method(cls),
+        mc.cores    = per_job_threads,
+        max_queries = max_queries,
+        min_support = min_support,
+        seed        = seed,
+        label       = paste(cls, d$side)
+      )
+    }, mc.cores = n_concurrent, mc.preschedule = FALSE)
+
+    # mclapply reports a failed child as a try-error rather than raising, which
+    # would otherwise be read as "no switch points" further down.
+    for (i in seq_along(cp_detect)) {
+      if (inherits(cp_detect[[i]], "try-error")) {
+        stop("Round 3 BLAST failed for ", cls, " ", directions[[i]]$side, ": ",
+             conditionMessage(attr(cp_detect[[i]], "condition")))
+      }
+    }
+    cp_detect_info_up <- cp_detect[[1]]
+    cp_detect_info_down <- cp_detect[[2]]
 
     cp_up <- cp_detect_info_up$cp_vals
     cp_down <- cp_detect_info_down$cp_vals

@@ -42,6 +42,16 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   exact path (the default) remains the recommendation for a production library.
   Numbers, calibration and the limits of the support gate are in
   `docs/round3_scaling.md` 11-12.
+- Round 3 runs the two directions concurrently. A single `blastn` saturates at
+  roughly a quarter of the threads it is given (24.7 of 96 on run-000129, 6.1 of
+  14 locally) and `-mt_mode 1` does not change that -- measured identical wall
+  time for 7x the memory -- so the way to use a large machine is more searches,
+  not more threads per search. Measured locally: two 7-thread searches sustain
+  1.81 queries/s against 1.28 for one 14-thread search, 1.42x on the same
+  cores. The upstream and downstream searches now run side by side with the
+  threads split between them. Output is unaffected (`tests.sh short` is
+  byte-identical) because the searches write separate files and the coverage
+  profiles are order-independent integer accumulations.
 - Sampled runs are deterministic: the draw is a function of `--seed` and the
   input alone. The generator is pinned explicitly rather than inherited, which
   closes a real hole -- under `RNGkind("L'Ecuyer-CMRG")`, which `parallel` code
