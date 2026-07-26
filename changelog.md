@@ -63,6 +63,20 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   reverse-complementing of minus-strand ranges, and `tests.sh short` produces a
   byte-identical `DANTE_TIR_final.fasta`. `bioconductor-rsamtools` is now a
   declared dependency (it arrived via BSgenome before).
+- CAP3 failures are no longer silent. `cap3assembly` ignored CAP3's exit
+  status, so a crash produced a zero-byte `.cap.aln` that the pipeline accepted
+  as a finished assembly -- and that the `os.path.exists` guard then reused on
+  every re-run. On run-000129 this cost the 168,012-copy EnSpm/CACTA class its
+  entire Round 1 without a word in the log. CAP3's limit is now measured: it
+  segfaults once one input exceeds ~1.07 Gbp (between 1.060 and 1.073 Gbp,
+  driven by total bases rather than read count or content), which for 6300 bp
+  flanking regions is ~118,000 sequences per part. `cap3assembly` refuses such
+  inputs up front, checks the exit status, leaves no bogus `.cap.aln`, and
+  `dante_tir.py` reports which classes lost their assembly.
+  `--max_class_size` remains off by default: enabling it perturbs the random
+  fragmentation and so changes results even when it splits nothing, and on
+  small inputs that shift is within the pipeline's own seed sensitivity
+  (`tests/data/short` gives 14/10/10 records for seeds 42/1/7).
 - Known issue documented, not changed: `find_switch_point_from_blast_coverage3`
   (used for EnSpm/CACTA) reads its QC thresholds 200 bp before the switch point
   it detected. `blast_cp.py` reproduces the behaviour deliberately; see

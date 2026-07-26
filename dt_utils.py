@@ -330,25 +330,71 @@ def make_fragment_files(output_dir: str,
 
 
 
-def cap3assembly(fasta_file):
+# CAP3 indexes its concatenated forward + reverse-complement sequence with a
+# signed 32-bit int, so it segfaults -- immediately and with no message of its
+# own -- once an input approaches 2^31 / 2 bases. Measured on cap3 10.2011:
+# 1.060 Gbp assembles, 1.073 Gbp segfaults after ~26 s, and it is the base
+# count that matters, not the read count or the content (5.4M x 200 bp fails
+# exactly like 10.8M x 100 bp; random sequence fails exactly like real
+# fragments). This bit run-000129: the 168,012-copy EnSpm/CACTA class produced
+# a 1.51 Gbp fragment file, CAP3 died in about a minute, and because the
+# failure was not checked the whole superfamily silently lost Round 1.
+CAP3_MAX_BASES = 1_000_000_000
+
+
+def fasta_total_bases(fasta_file) -> int:
+    """Total sequence bases in a FASTA file, headers and newlines excluded."""
+    total = 0
+    with open(fasta_file, 'rb') as f:
+        for line in f:
+            if not line.startswith(b'>'):
+                total += len(line.strip())
+    return total
+
+
+def cap3assembly(fasta_file, max_bases: int = CAP3_MAX_BASES):
     """
     run cap3 assembly
     :param fasta_file: path to fasta file
-    :return: path to cap3 output file
+    :param max_bases: refuse inputs above this many bases (see CAP3_MAX_BASES);
+                      0 disables the check
+    :return: path to cap3 output file, or None if the assembly could not be run
     assume that cap3 is in PATH
     """
     cmd = F'cap3 {fasta_file} -o 40 -p 80 -x cap -w'
     stdout_file = F'{fasta_file}.cap.aln'
-    if os.path.exists(stdout_file):
+    # An empty .cap.aln is what a crashed run leaves behind; treating it as a
+    # finished assembly would make the failure stick across re-runs.
+    if os.path.exists(stdout_file) and os.path.getsize(stdout_file) > 0:
         print(F"File {stdout_file} already exists, skipping assembly")
         return stdout_file
     stderr_file = F'{fasta_file}.cap.err'
+
+    n_bases = fasta_total_bases(fasta_file)
+    if max_bases and n_bases > max_bases:
+        msg = (F"CAP3 input {os.path.basename(fasta_file)} is {n_bases:,} bp, "
+               F"above the {max_bases:,} bp CAP3 can index "
+               F"(it segfaults, silently, past ~1.07 Gbp).\n"
+               F"    Reduce --max_class_size so this class is split into smaller parts.")
+        print(F"WARNING: {msg}")
+        with open(stderr_file, 'w') as f:
+            f.write(msg + "\n")
+        return None
+
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = p.communicate()
-    with open(stdout_file, 'w') as f:
-        f.write(stdout.decode())
-    with open(stderr_file, 'w') as f:
-        f.write(stderr.decode())
+    with open(stderr_file, 'wb') as f:
+        f.write(stderr)
+    if p.returncode != 0:
+        # Do not leave a zero-byte .cap.aln behind pretending to be a result.
+        if os.path.exists(stdout_file):
+            os.remove(stdout_file)
+        print(F"WARNING: CAP3 failed on {os.path.basename(fasta_file)} "
+              F"({n_bases:,} bp, exit status {p.returncode}); "
+              F"see {os.path.basename(stderr_file)}")
+        return None
+    with open(stdout_file, 'wb') as f:
+        f.write(stdout)
     return stdout_file
 
 

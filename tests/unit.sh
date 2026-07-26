@@ -10,4 +10,8 @@ echo
 echo "=== unit: no blocking subprocess call pipes its child's output ==="
 python3 "$ROOT/tests/test_subprocess_pipes.py"
 
+echo
+echo "=== unit: CAP3 failures are reported, not silently swallowed ==="
+python3 "$ROOT/tests/test_cap3_guard.py"
+
 echo "unit tests OK"

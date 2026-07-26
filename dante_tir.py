@@ -49,7 +49,11 @@ def main():
     parser.add_argument('-c', '--cpu', help='Number of CPUs to use',
                         type=int, default=1)
     parser.add_argument(
-        '--max_class_size', help='Maximum number of sequences per class before splitting for CAP3 assembly',
+        '--max_class_size',
+        help='Maximum number of sequences per class before splitting for CAP3 '
+             'assembly. Off by default. Needed for very high-copy superfamilies: '
+             'CAP3 segfaults once one input exceeds ~1.07 Gbp, which for 6300 bp '
+             'flanking regions is about 118,000 sequences per part',
         type=int, default=None
     )
     parser.add_argument(
@@ -244,6 +248,23 @@ def main():
 
     print(" done")
 
+    # cap3assembly returns None when CAP3 could not be run or crashed. Say so
+    # loudly: a failed assembly costs the affected class its Round-1 contigs,
+    # and on run-000129 that silently removed the largest superfamily from the
+    # primary detection path.
+    failed = [f for f, a in zip(frgs_fasta_both, aln) if a is None]
+    if failed:
+        failed_classes = sorted({m[0] for m, a in zip(frgs_class_mapping, aln)
+                                 if a is None})
+        print(F"\nWARNING: CAP3 assembly failed for {len(failed)} of "
+              F"{len(frgs_fasta_both)} fragment files, affecting: "
+              F"{', '.join(failed_classes)}")
+        print("         Those classes contribute no Round-1 contigs; detection "
+              "falls back to later rounds.")
+        print("         See the corresponding .cap.err files"
+              + (" and consider lowering --max_class_size." if args.max_class_size
+                 else " and consider setting --max_class_size."))
+
     # Log checksums of input/output fragment files for reproducibility verification (debug only)
     if args.debug:
         checksum_log = F'{args.working_dir}/assembly_input_checksums.txt'
@@ -289,12 +310,18 @@ def main():
             up_file = upstream_parts_dict[part_num]
             down_file = downstream_parts_dict[part_num]
 
-            aln_upstream_parts.append(aln[aln_idx])
+            aln_up = aln[aln_idx]
             aln_idx += 1
-            aln_downstream_parts.append(aln[aln_idx])
+            aln_down = aln[aln_idx]
             aln_idx += 1
-            upstream_fasta_parts.append(up_file)
-            downstream_fasta_parts.append(down_file)
+            # Drop parts whose assembly failed, keeping the aln/fasta lists
+            # paired; parse_cap3_aln zips them positionally.
+            if aln_up is not None:
+                aln_upstream_parts.append(aln_up)
+                upstream_fasta_parts.append(up_file)
+            if aln_down is not None:
+                aln_downstream_parts.append(aln_down)
+                downstream_fasta_parts.append(down_file)
 
         print("Parsing assemblies for", cls, "...", end="")
         # Pass lists to parse_cap3_aln (it handles both single files and lists)

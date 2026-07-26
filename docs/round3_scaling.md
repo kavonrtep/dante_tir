@@ -305,18 +305,63 @@ A Python reimplementation forces a decision: **replicate bug-for-bug first**
 so P0 is provably equivalent, then fix in a separate change with a visible
 before/after on real data.
 
-### 8.2 CAP3 segfaults on unsplit large classes
+### 8.2 CAP3 segfaults on unsplit large classes — DIAGNOSED AND GUARDED
 
 ```
 working_dir/Class_II_Subclass_1_TIR_EnSpm_CACTA_upstream.part_001.fasta.cap.err:
   Segmentation fault (core dumped)
 ```
 
-Both CACTA `.cap.aln` files are 0 bytes; the inputs were 1.78 GB each.
-`--max_class_size` was not passed, so no splitting happened. That is why
-Round 1 found only 75 elements genome-wide and why this genome depends
-entirely on Round 3. A finite default for `--max_class_size`, or a size-based
-auto-split, is warranted independently of everything above.
+Both CACTA `.cap.aln` files are 0 bytes; the inputs were 1.78 GB each
+(15,112,884 reads, 1.51 Gbp). `--max_class_size` was not passed, so no
+splitting happened, and Round 1 found only 75 elements genome-wide.
+
+**The limit, measured** (cap3 10.2011, synthetic random reads, so it reproduces
+away from the real data):
+
+| input | result |
+|---|---|
+| 10.60 M × 100 bp = 1.060 Gbp | assembles (still running at 200 s) |
+| 10.73 M × 100 bp = 1.073 Gbp | **SEGFAULT after 26 s** |
+| 10.80 M × 100 bp = 1.080 Gbp | **SEGFAULT after 27 s** |
+| 12.00 M × 100 bp = 1.200 Gbp | **SEGFAULT after 30 s** |
+| 15.20 M × 100 bp = 1.520 Gbp | **SEGFAULT after 54 s** |
+| 5.40 M × **200 bp** = 1.080 Gbp | **SEGFAULT after 25 s** |
+
+The last row is the control: the same base count with *half* the reads fails
+identically, so the limit is **total bases, not read count** — and content is
+irrelevant, since random sequence fails exactly like real fragments. The
+threshold sits between 1.060 and 1.073 Gbp, matching a signed 32-bit index over
+the concatenated forward + reverse-complement sequence:
+2 × (1.073e9 + 10.7e6) = 2.17e9 > 2³¹, while 2 × (1.060e9 + 10.6e6) = 2.14e9 <
+2³¹. It always dies within a minute — an index overflow, not slow exhaustion.
+
+For the pipeline: fragmentation yields ~8,993 bases per 6,300 bp region
+(168,012 regions → 1.51 Gbp), so CAP3 breaks above **~118,000 regions per
+part**.
+
+**What was fixed.** `cap3assembly()` never checked CAP3's exit status: it wrote
+the empty stdout to `.cap.aln`, returned that path as a success, and the
+`os.path.exists` guard then treated the zero-byte file as finished work on
+every re-run. It now refuses oversized inputs up front, checks the exit status,
+leaves no zero-byte `.cap.aln`, and `dante_tir.py` reports which classes lost
+their assembly. `tests/test_cap3_guard.py` stubs `cap3` so CI needs neither an
+assembler nor a gigabase of input.
+
+**The default was deliberately left off.** Enabling `--max_class_size` changes
+results even when it splits nothing — on `tests/data/short` (31 CACTA copies)
+it moved the count from 14 to 9 with a single part per class, because the
+grouping path perturbs the random stream that jitters fragmentation. That is
+not evidence that splitting is harmful: the same dataset gives **14, 10 and 10
+records for `--seed` 42, 1 and 7 with no splitting at all**, Round 1's BEAST
+being an MCMC. On a 31-copy class the pipeline's own seed sensitivity is
+±30 %, so the flag stays opt-in rather than silently perturbing every existing
+run.
+
+**For run-000129**: `--max_class_size 100000` splits CACTA into two parts of
+~0.76 Gbp, under the limit. Runtime is the open question — MuDR's 1.01 M
+fragments took ~1.9 h and CAP3 is superlinear, so a 7.6 M-fragment part may be
+impractical. The trade-off between assembly context and runtime is unmeasured.
 
 ### 8.3 Other stages not yet stress-tested at this scale — ANSWERED
 
