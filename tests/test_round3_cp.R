@@ -501,4 +501,67 @@ if (!(m1_at_cp < 3 && m2_at_cp > 20))
 ok(sprintf("thresholds hold at cp: flank mean %.2f < 3, element mean %.1f > 20",
            m1_at_cp, m2_at_cp))
 
+# ---------------------------------------------------------------------------
+message("=== Part 7: splitting a search into query chunks changes nothing ===")
+
+# blastn does not scale with -num_threads, so a large search is split into
+# concurrent chunks whose coverage profiles are summed. The profile is a
+# difference array, so that sum is exactly the arithmetic of a single search --
+# this asserts it, through the production path rather than in principle.
+if (blastn_bin == "" || mkdb_bin == "") {
+  message("  skip: blastn/makeblastdb not on PATH")
+} else {
+  chunk_res <- list()
+  for (k in c(1, 3, 5)) {
+    r <- run_blast_tir_analysis(
+      query_db = fa4, out_cp_file = file.path(wd4, sprintf("chunks%d.tsv", k)),
+      blast_db = fa4, method = "win200", evalue = "1e-10", strand = "plus",
+      min_length = 150, min_identity = 80, mc.cores = 2, chunks = k,
+      max_queries = 0, seed = 42)
+    chunk_res[[as.character(k)]] <- sort_cp(r$cp_vals)
+  }
+  for (k in c("3", "5")) {
+    cp_report(chunk_res[["1"]], chunk_res[[k]],
+              sprintf("Part 7 %s chunks vs one search", k))
+  }
+
+  # Chunking must also leave the sampled two-pass path alone.
+  s1 <- run_blast_tir_analysis(
+    query_db = fa4, out_cp_file = file.path(wd4, "samp_c1.tsv"), blast_db = fa4,
+    method = "win200", evalue = "1e-10", strand = "plus", min_length = 150,
+    min_identity = 80, mc.cores = 2, max_queries = 15, min_support = 4,
+    seed = 42, chunks = 1)
+  s3 <- run_blast_tir_analysis(
+    query_db = fa4, out_cp_file = file.path(wd4, "samp_c3.tsv"), blast_db = fa4,
+    method = "win200", evalue = "1e-10", strand = "plus", min_length = 150,
+    min_identity = 80, mc.cores = 2, max_queries = 15, min_support = 4,
+    seed = 42, chunks = 3)
+  cp_report(sort_cp(s1$cp_vals), sort_cp(s3$cp_vals),
+            "Part 7 sampled run, 3 chunks vs one")
+
+  # The chunk working files must not survive the run.
+  leftovers <- list.files(wd4, pattern = "\\.chunk[0-9]+\\.(fasta|prof)$")
+  if (length(leftovers))
+    fail(paste("Part 7: chunk working files left behind:",
+               paste(leftovers, collapse = ", ")))
+  ok("chunk FASTAs and profile files are cleaned up")
+
+  # A profile from a different subject set must be refused, not silently added.
+  other_fa <- file.path(wd4, "other.fasta")
+  writeXStringSet(DNAStringSet(c(x = paste(rep("A", 3000), collapse = ""))), other_fa)
+  prof <- file.path(wd4, "stray.prof")
+  st <- system2(BLAST_CP, c("--subjects", shQuote(other_fa), "--method", "win200",
+                            "--columns", "saccver,sstart,send",
+                            "--input", "/dev/null", "--dump-profile", shQuote(prof)),
+                stdout = FALSE, stderr = FALSE)
+  if (identical(as.integer(st), 0L)) {
+    st2 <- system2(BLAST_CP, c("--subjects", shQuote(fa4), "--method", "win200",
+                               "--merge", shQuote(prof), "--out", tempfile()),
+                   stdout = FALSE, stderr = FALSE)
+    if (identical(as.integer(st2), 0L))
+      fail("Part 7: merging a profile built against another subject set succeeded")
+    ok("a profile from a different subject set is refused")
+  }
+}
+
 message("ALL ROUND-3 SWITCH-POINT IDENTITY TESTS PASSED")

@@ -887,17 +887,28 @@ BLAST_CP_COLUMNS <- "qaccver saccver pident length sstart send"
 # Run one blastn | blast_cp.py stream and write the cp table to out_file.
 # Written to a .tmp first and renamed only on success, so a killed run never
 # leaves something that looks like a cached result.
-blast_cp_stream <- function(query, db, subjects, out_file, method,
-                            scale = 1, evalue = "1e-10",
-                            max_target_seqs = 500000L, strand = "plus",
-                            min_length = 150, min_identity = 80,
-                            mc.cores = 1, keep_hits = NULL) {
-  # Each pass is cached on its own, so a run killed between passes does not
-  # repeat the BLAST it already finished.
-  if (file.exists(out_file)) {
-    return(invisible(out_file))
-  }
-  cmd <- paste0(
+# Threads to give one blastn. It does not scale: measured 6.1 effective cores
+# of 14 locally and ~25 of 96 on run-000129, and efficiency *rises* as the
+# thread count falls (61% at 7 threads, 44% at 14, 26% at 96). So a large
+# machine is best used by running several modest searches at once, which is
+# what the chunking below does.
+BLAST_TARGET_THREADS <- 12
+
+# How many concurrent searches to split one query set into, given a thread
+# budget. Each chunk costs one coverage profile in RAM and on disk
+# (n_subjects x max_len x 4 bytes -- 4.2 GB for run-000129's CACTA class), so
+# this deliberately stops well short of one chunk per thread.
+blast_chunk_count <- function(threads, max_chunks = 8L) {
+  max(1L, min(as.integer(max_chunks), as.integer(threads %/% BLAST_TARGET_THREADS)))
+}
+
+# Build one "blastn | blast_cp.py" pipeline. `sink` is the blast_cp.py argument
+# that decides what comes out: a cp table (--out) or a raw profile for later
+# merging (--dump-profile).
+blast_cp_cmd <- function(query, db, subjects, method, scale, evalue,
+                         max_target_seqs, strand, min_length, min_identity,
+                         threads, keep_hits, sink) {
+  paste0(
     "set -o pipefail; ",
     "blastn -query ", shQuote(query),
     " -db ", shQuote(db),
@@ -906,7 +917,7 @@ blast_cp_stream <- function(query, db, subjects, out_file, method,
     " -max_target_seqs ", format(max_target_seqs, scientific = FALSE),
     " -strand ", strand,
     " -perc_identity ", min_identity,
-    " -num_threads ", mc.cores,
+    " -num_threads ", threads,
     " | ", shQuote(blast_cp_script()),
     " --subjects ", shQuote(subjects),
     " --method ", method,
@@ -915,14 +926,79 @@ blast_cp_stream <- function(query, db, subjects, out_file, method,
     " --min-identity ", min_identity,
     " --scale ", format(scale, digits = 15, scientific = FALSE),
     if (is.null(keep_hits)) "" else paste0(" --keep-hits ", shQuote(keep_hits)),
-    " --out ", shQuote(paste0(out_file, ".tmp")))
+    " ", sink)
+}
+
+run_shell <- function(cmd, what) {
   status <- system2("bash", c("-c", shQuote(cmd)))
   if (!identical(as.integer(status), 0L)) {
-    unlink(paste0(out_file, ".tmp"))
-    stop("BLAST/blast_cp.py failed for ", out_file,
-         " (exit status ", status, ")")
+    stop("BLAST/blast_cp.py failed for ", what, " (exit status ", status, ")")
   }
-  if (!file.rename(paste0(out_file, ".tmp"), out_file)) {
+  invisible(TRUE)
+}
+
+blast_cp_stream <- function(query, db, subjects, out_file, method,
+                            scale = 1, evalue = "1e-10",
+                            max_target_seqs = 500000L, strand = "plus",
+                            min_length = 150, min_identity = 80,
+                            mc.cores = 1, keep_hits = NULL, chunks = 1,
+                            label = NULL) {
+  # Each pass is cached on its own, so a run killed between passes does not
+  # repeat the BLAST it already finished.
+  if (file.exists(out_file)) {
+    return(invisible(out_file))
+  }
+  tmp <- paste0(out_file, ".tmp")
+  prefix <- sub("\\.tsv$", "", out_file)
+  tag <- if (is.null(label)) "" else paste0(label, ": ")
+
+  n_query <- if (chunks > 1) nrow(fasta.index(query)) else 0L
+  chunks <- max(1L, min(as.integer(chunks), n_query))
+
+  if (chunks > 1) {
+    # Split the queries across concurrent searches and sum their coverage
+    # profiles. The profile is a difference array, so summing chunk profiles is
+    # exactly the arithmetic of a single search -- not an approximation.
+    # Interleaved rather than contiguous, so every chunk sees a comparable mix
+    # of the (position-ordered) query set and they finish at similar times.
+    per_threads <- max(1L, as.integer(mc.cores) %/% chunks)
+    message(sprintf("  round3 %s%d query chunks x %d threads (%d queries)",
+                    tag, chunks, per_threads, n_query))
+    idx <- split(seq_len(n_query), rep_len(seq_len(chunks), n_query))
+    q_files <- sprintf("%s.chunk%02d.fasta", prefix, seq_len(chunks))
+    p_files <- sprintf("%s.chunk%02d.prof", prefix, seq_len(chunks))
+    on.exit(unlink(c(q_files, p_files)), add = TRUE)
+    for (i in seq_len(chunks)) write_fasta_subset(query, idx[[i]], q_files[i])
+
+    res <- mclapply(seq_len(chunks), function(i) {
+      run_shell(blast_cp_cmd(q_files[i], db, subjects, method, scale, evalue,
+                             max_target_seqs, strand, min_length, min_identity,
+                             per_threads, if (i == 1) keep_hits else NULL,
+                             paste("--dump-profile", shQuote(p_files[i]))),
+                basename(p_files[i]))
+    }, mc.cores = chunks, mc.preschedule = FALSE)
+    for (i in seq_along(res)) {
+      if (inherits(res[[i]], "try-error")) {
+        stop("chunk ", i, " of ", chunks, " failed for ", basename(out_file),
+             ": ", conditionMessage(attr(res[[i]], "condition")))
+      }
+    }
+    run_shell(paste0(shQuote(blast_cp_script()),
+                     " --subjects ", shQuote(subjects),
+                     " --method ", method,
+                     " --scale ", format(scale, digits = 15, scientific = FALSE),
+                     " --merge ", paste(shQuote(p_files), collapse = " "),
+                     " --out ", shQuote(tmp)),
+              basename(out_file))
+  } else {
+    run_shell(blast_cp_cmd(query, db, subjects, method, scale, evalue,
+                           max_target_seqs, strand, min_length, min_identity,
+                           mc.cores, keep_hits, paste("--out", shQuote(tmp))),
+              basename(out_file))
+  }
+
+  if (!file.rename(tmp, out_file)) {
+    unlink(tmp)
     stop("could not create ", out_file)
   }
   invisible(out_file)
@@ -1021,8 +1097,10 @@ run_blast_tir_analysis <- function(
                                 # subject is re-resolved exactly (see below)
     seed            = 42,
     keep_hits       = NULL,     # optional path for the surviving hit rows
-    label           = NULL      # tag for log lines; directions run concurrently
+    label           = NULL,     # tag for log lines; directions run concurrently
                                 # and their messages interleave
+    chunks          = 1         # split the query set across this many
+                                # concurrent searches (see blast_chunk_count)
 ) {
   tag <- if (is.null(label)) "" else paste0(label, ": ")
   # The all-vs-all self-BLAST here produces a table that is hopeless to
@@ -1078,7 +1156,7 @@ run_blast_tir_analysis <- function(
                       evalue = evalue, max_target_seqs = max_target_seqs,
                       strand = strand, min_length = min_length,
                       min_identity = min_identity, mc.cores = mc.cores,
-                      keep_hits = keep_hits)
+                      keep_hits = keep_hits, chunks = chunks, label = label)
       cp1 <- read_cp_table(cp1_file)
 
       # Unresolved: too little observed support to trust the estimate, plus
@@ -1102,7 +1180,8 @@ run_blast_tir_analysis <- function(
                         out_file = cp2_file, method = method, scale = 1,
                         evalue = evalue, max_target_seqs = max_target_seqs,
                         strand = strand, min_length = min_length,
-                        min_identity = min_identity, mc.cores = mc.cores)
+                        min_identity = min_identity, mc.cores = mc.cores,
+                        chunks = chunks, label = label)
         cp2 <- read_cp_table(cp2_file)
         cp_all <- rbind(cp1[!(cp1$id %in% cp2$id), , drop = FALSE], cp2)
       }
@@ -1117,7 +1196,7 @@ run_blast_tir_analysis <- function(
                       evalue = evalue, max_target_seqs = max_target_seqs,
                       strand = strand, min_length = min_length,
                       min_identity = min_identity, mc.cores = mc.cores,
-                      keep_hits = keep_hits)
+                      keep_hits = keep_hits, chunks = chunks, label = label)
     }
   }
 
@@ -1894,9 +1973,14 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads,
     # Below 4 threads there is nothing to split, so stay sequential.
     n_concurrent <- if (threads >= 4) length(directions) else 1L
     per_job_threads <- max(1, threads %/% n_concurrent)
-    if (n_concurrent > 1) {
-      message(sprintf("  round3 %s: %d directions concurrently, %d threads each",
-                      cls, n_concurrent, per_job_threads))
+    # Within each direction, split the queries further so no single blastn is
+    # asked to scale past the point where it stops paying (BLAST_TARGET_THREADS).
+    n_chunks <- blast_chunk_count(per_job_threads)
+    if (n_concurrent > 1 || n_chunks > 1) {
+      message(sprintf(
+        "  round3 %s: %d directions x %d query chunks, %d threads each (%d searches)",
+        cls, n_concurrent, n_chunks, max(1L, per_job_threads %/% n_chunks),
+        n_concurrent * n_chunks))
     }
     cp_detect <- mclapply(directions, function(d) {
       run_blast_tir_analysis(
@@ -1908,7 +1992,8 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads,
         max_queries = max_queries,
         min_support = min_support,
         seed        = seed,
-        label       = paste(cls, d$side)
+        label       = paste(cls, d$side),
+        chunks      = n_chunks
       )
     }, mc.cores = n_concurrent, mc.preschedule = FALSE)
 

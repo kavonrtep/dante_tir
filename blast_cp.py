@@ -25,6 +25,7 @@ equivalence against the R implementations.
 
 import argparse
 import gzip
+import hashlib
 import os
 import resource
 import sys
@@ -44,6 +45,50 @@ DEFAULT_COLUMNS = "qaccver,saccver,pident,length,sstart,send"
 # The full `-outfmt 6` default, for reprocessing tables produced elsewhere.
 STD_COLUMNS = ("qaccver,saccver,pident,length,mismatch,gapopen,"
                "qstart,qend,sstart,send,evalue,bitscore")
+
+
+# Profile files exist so that one search can be split into concurrent query
+# chunks whose results are then summed. The array is a *difference* array
+# (+1 at each hit start, -1 past its end), and summing difference arrays is
+# exactly summing the coverage they encode, so a chunked run is not an
+# approximation of the single-stream run -- it is the same arithmetic in a
+# different order. The header pins the subject set: profiles built against
+# different databases must never be added together.
+PROFILE_MAGIC = b"DANTE_TIR_PROFILE_1\n"
+
+
+def profile_header(n_subjects, stride, names):
+    digest = hashlib.sha256("\n".join(names).encode("utf-8")).digest()
+    return (PROFILE_MAGIC
+            + np.array([n_subjects, stride], dtype=np.int64).tobytes()
+            + digest)
+
+
+def write_profile(path, flat, n_subjects, stride, names):
+    with open(path, "wb") as f:
+        f.write(profile_header(n_subjects, stride, names))
+        flat.tofile(f)
+
+
+def read_profile_into(path, total, n_subjects, stride, names, block=1 << 26):
+    """Add the profile in `path` to `total`, in blocks to bound memory."""
+    want = profile_header(n_subjects, stride, names)
+    with open(path, "rb") as f:
+        got = f.read(len(want))
+        if got[:len(PROFILE_MAGIC)] != PROFILE_MAGIC:
+            sys.exit("%s is not a blast_cp profile file" % path)
+        if got != want:
+            sys.exit("%s was built against a different subject set or geometry; "
+                     "profiles can only be merged within one search" % path)
+        off = 0
+        while off < total.size:
+            n = min(block, total.size - off)
+            buf = np.fromfile(f, dtype=np.int32, count=n)
+            if buf.size != n:
+                sys.exit("%s is truncated (%d of %d cells)"
+                         % (path, off + buf.size, total.size))
+            total[off:off + n] += buf
+            off += n
 
 
 def log(msg):
@@ -238,6 +283,16 @@ def parse_args(argv=None):
                    help="keep hits with evalue < this (needs the evalue column)")
     p.add_argument("--min-sstart", type=float, default=12,
                    help="keep hits with sstart > this")
+    p.add_argument("--dump-profile", default=None,
+                   help="write the raw coverage profile here instead of "
+                        "computing switch points, for later --merge. Lets one "
+                        "search be split into concurrent query chunks: blastn "
+                        "does not scale with -num_threads, so several smaller "
+                        "searches beat one large one")
+    p.add_argument("--merge", nargs="+", default=None,
+                   help="sum these profile files (from --dump-profile) and "
+                        "compute switch points from the total. No BLAST input "
+                        "is read")
     p.add_argument("--scale", type=float, default=1.0,
                    help="multiply the coverage profile by this before the "
                         "switch-point test. Set to N/Q when the queries are a "
@@ -274,6 +329,8 @@ def main(argv=None):
 
     if args.scale <= 0:
         sys.exit("--scale must be positive")
+    if args.merge and args.dump_profile:
+        sys.exit("--merge and --dump-profile are mutually exclusive")
 
     names, max_len = scan_fasta(args.subjects)
     if not names:
@@ -289,6 +346,13 @@ def main(argv=None):
     log("%d subjects, max length %d, profile array %.2f GB"
         % (len(names), max_len, nbytes / 1e9))
     flat = np.zeros(len(names) * stride, dtype=np.int32)
+
+    if args.merge:
+        for path in args.merge:
+            read_profile_into(path, flat, len(names), stride, names)
+        log("merged %d profiles" % len(args.merge))
+        return emit_switch_points(args, names, flat, stride,
+                                  n_in=0, n_kept=0)
 
     from_stdin = args.input == "-"
     fh = (sys.stdin.buffer if from_stdin
@@ -391,6 +455,19 @@ def main(argv=None):
             "dropped -- is it the database that was searched?"
             % (n_oob, os.path.basename(args.subjects)))
 
+    if args.dump_profile:
+        write_profile(args.dump_profile, flat, len(names), stride, names)
+        log("%d rows read, %d kept, profile written to %s (%.2f GB), "
+            "peak RSS %.2f GB"
+            % (n_in, n_kept, os.path.basename(args.dump_profile),
+               flat.nbytes / 1e9,
+               resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6))
+        return 0
+
+    return emit_switch_points(args, names, flat, stride, n_in, n_kept)
+
+
+def emit_switch_points(args, names, flat, stride, n_in, n_kept):
     method = METHODS[args.method]
     out = sys.stdout if args.out == "-" else open(args.out, "w")
     n_cp = n_profiles = 0
