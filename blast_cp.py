@@ -169,17 +169,18 @@ def cp_win200(cov):
 def cp_cumsum(cov):
     """find_switch_point_from_blast_coverage3() -- cumulative means (CACTA).
 
-    Replicates dt_utils.R:499 exactly, including two quirks that change which
-    subjects pass. Do not "fix" them here; they are what the R path does and
-    tests/test_round3_cp.R asserts the match. See docs/round3_scaling.md 8.1.
+    m1[i] is the mean coverage of 1..i (the flank side of a switch at i) and
+    m2[i] the mean of i..L (the element side); the switch point maximises their
+    ratio, and the thresholds are then read at that position.
 
-      * m1/m2 are indexed by position, but the QC thresholds are read at
-        `cp - W`, i.e. 200 bp before the detected switch point (in cp_win200
-        the same expression is correct, because there the vectors are indexed
-        by window offset).
-      * m2 divides by (L - i) rather than (L - i + 1), so it is the mean of
-        positions i..L over one element too few, and is Inf at i = L. The edge
-        zeroing below hides that from which.max.
+    Two defects were fixed in 0.2.9 (docs/round3_scaling.md 8.1), so this no
+    longer matches pre-0.2.9 output:
+
+      * the thresholds were read at `cp - W`, 200 bp before the detected switch
+        point, which made the flank test far too permissive -- at the smallest
+        admissible cp of 201 it tested the coverage of a single base;
+      * m2 divided by (L - i) rather than (L - i + 1), one element short, and
+        was Inf at i = L.
 
     Returns (cp or None, mcov2); see cp_win200() on the second element.
     """
@@ -191,21 +192,16 @@ def cp_cumsum(cov):
     sl = np.cumsum(cov, dtype=np.float64)
     sr = np.cumsum(cov[::-1], dtype=np.float64)[::-1]
     m1 = sl / pos
-    with np.errstate(divide="ignore", invalid="ignore"):
-        m2 = sr / (L - pos)
-        m12 = (m2 + cov.mean() * 0.04) / (m1 + cov.mean() * 0.04)
+    m2 = sr / (L - pos + 1)
+    mu = cov.mean() * 0.04
+    m12 = (m2 + mu) / (m1 + mu)
     m12[:W] = 0.0            # R: m12[1:W] <- 0
     m12[L - W - 1:] = 0.0    # R: m12[(L-W):L] <- 0
     if not np.any(np.isfinite(m12)):
         return None, float("nan")
     cp = int(np.nanargmax(m12)) + 1   # R which.max skips NA/NaN
-    j = cp - W                        # R: m1[cp - W], 1-based
-    if j < 1:
-        # R would index with a negative subscript here and error out; the edge
-        # zeroing above makes this unreachable for L >= 500.
-        return None, float("nan")
-    mcov1 = m1[j - 1]
-    mcov2 = m2[j - 1]
+    mcov1 = m1[cp - 1]
+    mcov2 = m2[cp - 1]
     if (mcov1 < 3 and mcov2 > 20) or (mcov1 < 2 and mcov2 > 10):
         return cp, mcov2
     return None, mcov2

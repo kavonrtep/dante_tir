@@ -467,4 +467,38 @@ if (blastn_bin == "" || mkdb_bin == "") {
   ok("a different seed still covers the same subjects")
 }
 
+# ---------------------------------------------------------------------------
+message("=== Part 6: coverage3 reads its thresholds at the switch point ===")
+
+# Until 0.2.9, find_switch_point_from_blast_coverage3() read its quality
+# thresholds at cp - W: 200 bp before the switch point it had just found. m1/m2
+# there are indexed by position, so that tested the wrong stretch of sequence.
+# At the smallest admissible cp of 201 it compared m1[1] -- the coverage of a
+# single base -- against "flank mean < 3", which let almost anything through
+# and piled 13,753 of run-000129's CACTA calls onto position 201.
+
+# A profile whose flank is genuinely dirty at the switch point (mean 46) but
+# looks clean 200 bp earlier (mean 2). The old code accepted cp = 201 here.
+cvrg_dirty <- c(rep(2, 121), rep(113, 192), rep(246, 298))
+cp_dirty <- find_switch_point_from_blast_coverage3(cvrg_dirty)
+if (!is.na(cp_dirty))
+  fail(sprintf("Part 6: accepted cp=%s although the flank mean at it is %.1f (needs < 3)",
+               cp_dirty, mean(cvrg_dirty[1:cp_dirty])))
+ok("a switch point whose flank is dirty AT it is rejected")
+
+# The same shape with a genuinely clean flank must still be found.
+cvrg_clean <- c(rep(0, 700), rep(150, 1300))
+cp_clean <- find_switch_point_from_blast_coverage3(cvrg_clean)
+if (is.na(cp_clean) || abs(cp_clean - 700) > 5)
+  fail(sprintf("Part 6: expected a switch point near 700, got %s", cp_clean))
+ok(sprintf("a clean switch point is still found (cp = %d)", cp_clean))
+
+# And the thresholds must hold at cp itself, not 200 bp before it.
+m1_at_cp <- mean(cvrg_clean[1:cp_clean])
+m2_at_cp <- mean(cvrg_clean[cp_clean:length(cvrg_clean)])
+if (!(m1_at_cp < 3 && m2_at_cp > 20))
+  fail("Part 6: the returned cp does not satisfy the thresholds at its own position")
+ok(sprintf("thresholds hold at cp: flank mean %.2f < 3, element mean %.1f > 20",
+           m1_at_cp, m2_at_cp))
+
 message("ALL ROUND-3 SWITCH-POINT IDENTITY TESTS PASSED")

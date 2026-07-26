@@ -77,10 +77,21 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   fragmentation and so changes results even when it splits nothing, and on
   small inputs that shift is within the pipeline's own seed sensitivity
   (`tests/data/short` gives 14/10/10 records for seeds 42/1/7).
-- Known issue documented, not changed: `find_switch_point_from_blast_coverage3`
-  (used for EnSpm/CACTA) reads its QC thresholds 200 bp before the switch point
-  it detected. `blast_cp.py` reproduces the behaviour deliberately; see
-  `docs/round3_scaling.md` 8.1.
+- Fix `find_switch_point_from_blast_coverage3` (the EnSpm/CACTA method), which
+  read its quality thresholds at `cp - W` -- 200 bp away from the switch point
+  it had just found. `m1`/`m2` there are indexed by position, so the test
+  applied to the wrong stretch of sequence; the expression had been copied from
+  `...coverage2`, where it is correct because those vectors are indexed by
+  window offset. At the smallest admissible switch point, 201, it compared the
+  coverage of a *single base* against "flank mean < 3", so almost anything
+  passed. Recomputed on run-000129's own 41.5 GB Round-3 output, the fix drops
+  switch points from 92,141 to 75,135 (-18.5%) and the pile-up on position 201
+  from 13,753 calls to 1,572, while 99.9% of the calls kept by both land on
+  exactly the same position -- it rejects, it does not move boundaries. Two
+  neighbouring defects went with it: a dead `swp` assignment and an
+  off-by-one in `m2`'s divisor. `blast_cp.py` carries the same fix and
+  `tests/test_round3_cp.R` Part 6 pins the semantics. **This changes results
+  for EnSpm/CACTA**; other superfamilies use `...coverage2` and are unaffected.
 
 - Fix a hang on large inputs: `cluster_aa_sequences_mmseqs2` and
   `make_blast_db` ran their child processes with `subprocess.check_call(...,

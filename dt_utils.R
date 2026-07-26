@@ -506,27 +506,32 @@ find_switch_point_from_blast_coverage3 <- function (cvrg){
   if (L < 500){
     return(NA)
   }
-  swp <- seq(W, L-200, by = 1)
-  swp <- seq(1, L, by = 1)
+  # m1 and m2 are indexed by POSITION: m1[i] is the mean coverage of 1..i (the
+  # flank side of a switch at i), m2[i] the mean of i..L (the element side).
+  pos <- seq_len(L)
   sumsum_left <- cumsum(cvrg)
   sumsum_right <- rev(cumsum(rev(cvrg)))
-  # means of coverage 1 to swp and swp to end
-  m1 <- sumsum_left/swp
-  m2 <- sumsum_right/(L - swp)
-  #m12 <- (m2 + 1) / (m1 + 1)
-  m12 <- (m2 + mean(cvrg)*0.04) / (m1 + mean(cvrg)*0.04)
+  m1 <- sumsum_left / pos
+  m2 <- sumsum_right / (L - pos + 1)
+  m12 <- (m2 + mean(cvrg) * 0.04) / (m1 + mean(cvrg) * 0.04)
   m12[1:W] <- 0
   m12[(L-W):L] <- 0
   cp <- which.max(m12)
-  mcov1 <- m1[cp - W]
-  mcov2 <- m2[cp - W]
+  # Read the quality thresholds AT the switch point. Until 0.2.9 this was
+  # m1[cp - W] / m2[cp - W], i.e. 200 bp before it -- copied from
+  # find_switch_point_from_blast_coverage2(), where the same expression is
+  # correct because there m1/m2 are indexed by window offset and cp is
+  # which.max() + W. Here it made the flank test far too permissive: at the
+  # smallest admissible cp of 201 it compared m1[1], the coverage of a single
+  # base, against "< 3", which is why 13,753 of run-000129's CACTA calls piled
+  # up on position 201. See docs/round3_scaling.md 8.1.
+  mcov1 <- m1[cp]
+  mcov2 <- m2[cp]
   if (mcov1 < 3 & mcov2 > 20 | mcov1 < 2 & mcov2 > 10){
     return(cp)
   }else{
     return(NA)
   }
-
-  return(cp)
 }
 
 # Reference implementation -- see the note above filter_blast3().

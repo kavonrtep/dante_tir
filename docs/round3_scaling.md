@@ -277,33 +277,52 @@ validated against real data at real scale without repeating the 10 h BLAST.
 
 ## 8. Adjacent findings (separate from the BLAST work)
 
-### 8.1 `find_switch_point_from_blast_coverage3()` has an off-by-W index bug
+### 8.1 `find_switch_point_from_blast_coverage3()` off-by-W bug — FIXED in 0.2.9
 
-`dt_utils.R:499` — and this is the function used for **CACTA**, the class that
-fails here.
+`dt_utils.R` — and this is the function used for **CACTA**, the class that
+motivated all of the above. It read its quality thresholds at `cp - W`:
 
 ```r
-swp <- seq(W, L-200, by = 1)
-swp <- seq(1, L, by = 1)      # silently overwrites the line above
-...
-m1 <- sumsum_left/swp
+m1 <- sumsum_left/swp          # indexed by POSITION
 m2 <- sumsum_right/(L - swp)
-...
 cp <- which.max(m12)
-mcov1 <- m1[cp - W]           # m1/m2 are indexed by POSITION here
+mcov1 <- m1[cp - W]            # 200 bp before the switch point
 mcov2 <- m2[cp - W]
 ```
 
-`m1`/`m2` are indexed by position, so the QC thresholds are evaluated 200 bp
-before the detected switch point. In `…coverage2` the identical expression is
-correct, because there `m1`/`m2` are indexed by window offset and
-`cp = which.max(...) + W` — it looks copy-pasted. Additionally
-`m2 <- sumsum_right/(L - swp)` is off by one (the mean of `cvrg[i..L]` needs
-`L - i + 1`) and yields `Inf` at `i = L`, masked by the edge zeroing.
+`m1`/`m2` are indexed by position, so those thresholds tested a stretch 200 bp
+away from the switch point they had just found. The expression was copied from
+`…coverage2()`, where it is correct because there `m1`/`m2` are indexed by
+window offset and `cp = which.max(...) + W`. Two further defects sat alongside
+it: `swp <- seq(W, L-200, by = 1)` was overwritten on the next line, and
+`m2 <- sumsum_right/(L - swp)` divided by one element too few (`Inf` at
+`i = L`, masked by the edge zeroing).
 
-A Python reimplementation forces a decision: **replicate bug-for-bug first**
-so P0 is provably equivalent, then fix in a separate change with a visible
-before/after on real data.
+**Why it mattered.** At the smallest admissible cp of 201, `m1[cp - W]` is
+`m1[1]` — the coverage of a *single base* — tested against "flank mean < 3".
+Almost anything passes that, which is why 13,753 of run-000129's CACTA calls
+piled onto position 201.
+
+**Measured effect of the fix**, recomputing the exact cp table from that run's
+own 41.5 GB Round-3 output (all 168,012 queries, 2.54e9 hits):
+
+| | buggy | fixed |
+|---|---|---|
+| switch points | 92,141 | **75,135** (−18.5 %) |
+| calls at position 201 | 13,753 (14.9 % of calls) | **1,572 (2.1 %)** |
+| median cp | 1,859 | 2,043 |
+| lost / gained | — | 17,323 lost, 317 gained |
+| positions of calls kept by both | — | **99.9 % identical, 100 % within 10 bp** |
+
+So the fix is almost purely a *rejection* change: the boundaries it keeps sit
+where they always did, and the ~19 % it drops are calls the flank test should
+never have accepted — 12,181 of them the position-201 artefact. On
+`tests/data/short` the element count moved 14 → 15, all 14 originals unchanged.
+
+`blast_cp.py`'s `cp_cumsum()` carries the same fix, and
+`tests/test_round3_cp.R` Part 6 pins the semantics: a profile whose flank is
+dirty *at* the switch point but clean 200 bp earlier must be rejected, a clean
+one must still be found, and the thresholds must hold at the returned position.
 
 ### 8.2 CAP3 segfaults on unsplit large classes — DIAGNOSED AND GUARDED
 
