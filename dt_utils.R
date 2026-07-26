@@ -879,9 +879,83 @@ swt_pt_method <- function(tir_class) {
 # twice the text volume, all of it discarded.
 BLAST_CP_COLUMNS <- "qaccver saccver pident length sstart send"
 
+# Run one blastn | blast_cp.py stream and write the cp table to out_file.
+# Written to a .tmp first and renamed only on success, so a killed run never
+# leaves something that looks like a cached result.
+blast_cp_stream <- function(query, db, subjects, out_file, method,
+                            scale = 1, evalue = "1e-10",
+                            max_target_seqs = 500000L, strand = "plus",
+                            min_length = 150, min_identity = 80,
+                            mc.cores = 1, keep_hits = NULL) {
+  # Each pass is cached on its own, so a run killed between passes does not
+  # repeat the BLAST it already finished.
+  if (file.exists(out_file)) {
+    return(invisible(out_file))
+  }
+  cmd <- paste0(
+    "set -o pipefail; ",
+    "blastn -query ", shQuote(query),
+    " -db ", shQuote(db),
+    " -outfmt ", shQuote(paste("6", BLAST_CP_COLUMNS)),
+    " -evalue ", evalue,
+    " -max_target_seqs ", format(max_target_seqs, scientific = FALSE),
+    " -strand ", strand,
+    " -perc_identity ", min_identity,
+    " -num_threads ", mc.cores,
+    " | ", shQuote(blast_cp_script()),
+    " --subjects ", shQuote(subjects),
+    " --method ", method,
+    " --columns ", shQuote(gsub(" ", ",", BLAST_CP_COLUMNS)),
+    " --min-length ", min_length,
+    " --min-identity ", min_identity,
+    " --scale ", format(scale, digits = 15, scientific = FALSE),
+    if (is.null(keep_hits)) "" else paste0(" --keep-hits ", shQuote(keep_hits)),
+    " --out ", shQuote(paste0(out_file, ".tmp")))
+  status <- system2("bash", c("-c", shQuote(cmd)))
+  if (!identical(as.integer(status), 0L)) {
+    unlink(paste0(out_file, ".tmp"))
+    stop("BLAST/blast_cp.py failed for ", out_file,
+         " (exit status ", status, ")")
+  }
+  if (!file.rename(paste0(out_file, ".tmp"), out_file)) {
+    stop("could not create ", out_file)
+  }
+  invisible(out_file)
+}
+
+read_cp_table <- function(path) {
+  read.table(path, header = TRUE, sep = "\t",
+             colClasses = c("character", "numeric", "numeric"),
+             na.strings = "NA", stringsAsFactors = FALSE)
+}
+
+# Accessions of a FASTA, in file order (headers only, sequence not loaded).
+fasta_ids <- function(fasta) {
+  sub("\\s.*", "", fasta.index(fasta)$desc)
+}
+
+# Copy the records at `idx` (positions in file order) to out_fa, reading only
+# those records rather than the whole file.
+write_fasta_subset <- function(fasta, idx, out_fa) {
+  fai <- fasta.index(fasta)
+  writeXStringSet(readDNAStringSet(fai[idx, , drop = FALSE]), out_fa)
+  invisible(length(idx))
+}
+
+# Evaluate expr under a fixed seed without disturbing the caller's RNG stream,
+# so the query sample depends only on --seed and not on what ran before it.
+with_seed <- function(seed, expr) {
+  if (exists(".Random.seed", envir = .GlobalEnv)) {
+    old <- get(".Random.seed", envir = .GlobalEnv)
+    on.exit(assign(".Random.seed", old, envir = .GlobalEnv))
+  }
+  set.seed(seed)
+  expr
+}
+
 run_blast_tir_analysis <- function(
     query_db,                   # e.g., upstream_db or downstream_db
-    out_cp_file,                # small "id<TAB>cp" table written by blast_cp.py
+    out_cp_file,                # small "id/cp/support" table (see blast_cp.py)
     blast_db,                   # same as query_db in your example
     method,                     # swt_pt_method(cls): "win200" or "cumsum"
     evalue          = "1e-10",
@@ -891,6 +965,10 @@ run_blast_tir_analysis <- function(
     min_identity    = 80,
     max_evalue      = 1e-5,     # matches filter_blast3()'s default
     mc.cores        = 1,
+    max_queries     = 0,        # 0 = use every sequence as a query (exact)
+    min_support     = 30,       # sampled element-side coverage below which a
+                                # subject is re-resolved exactly (see below)
+    seed            = 42,
     keep_hits       = NULL      # optional path for the surviving hit rows
 ) {
   # The all-vs-all self-BLAST here produces a table that is hopeless to
@@ -906,45 +984,90 @@ run_blast_tir_analysis <- function(
   # cannot fire; the column is therefore not requested at all.
   stopifnot(as.numeric(evalue) <= max_evalue)
 
+  pass2_ids <- character(0)
+
   if (!file.exists(out_cp_file)) {
-    cmd <- paste0(
-      "set -o pipefail; ",
-      "blastn -query ", shQuote(query_db),
-      " -db ", shQuote(blast_db),
-      " -outfmt ", shQuote(paste("6", BLAST_CP_COLUMNS)),
-      " -evalue ", evalue,
-      " -max_target_seqs ", format(max_target_seqs, scientific = FALSE),
-      " -strand ", strand,
-      " -perc_identity ", min_identity,
-      " -num_threads ", mc.cores,
-      " | ", shQuote(blast_cp_script()),
-      " --subjects ", shQuote(blast_db),
-      " --method ", method,
-      " --columns ", shQuote(gsub(" ", ",", BLAST_CP_COLUMNS)),
-      " --min-length ", min_length,
-      " --min-identity ", min_identity,
-      if (is.null(keep_hits)) "" else paste0(" --keep-hits ", shQuote(keep_hits)),
-      " --out ", shQuote(paste0(out_cp_file, ".tmp")))
-    status <- system2("bash", c("-c", shQuote(cmd)))
-    if (!identical(as.integer(status), 0L)) {
-      unlink(paste0(out_cp_file, ".tmp"))
-      stop("BLAST/blast_cp.py failed for ", out_cp_file,
-           " (exit status ", status, ")")
-    }
-    # Rename only on success so a killed run never looks like a cached result.
-    if (!file.rename(paste0(out_cp_file, ".tmp"), out_cp_file)) {
-      stop("could not create ", out_cp_file)
+    n_query <- if (max_queries > 0) nrow(fasta.index(query_db)) else 0L
+
+    if (max_queries > 0 && n_query > max_queries) {
+      # ---- P2: bound the BLAST itself -------------------------------------
+      # BLAST cost is linear in the number of queries, and the coverage this
+      # class needs is wildly oversaturated (the median CACTA subject carried
+      # ~180x more depth than the thresholds test). So run a random Q-of-N
+      # sample of the queries and scale the profiles by N/Q, which is an
+      # unbiased estimate of the full coverage.
+      #
+      # Sampling only endangers subjects whose *scaled* coverage lands near
+      # the thresholds -- and those are exactly the ones with little observed
+      # support, since observed support ~= threshold * Q/N there. Every
+      # subject below min_support is therefore re-resolved in a second pass
+      # against the FULL query set, which for those subjects is not an
+      # estimate at all but the same answer the unsampled path would give.
+      # The second pass is cheap because its database holds only those
+      # subjects, and BLAST cost scales with database size.
+      prefix <- sub("\\.tsv$", "", out_cp_file)
+      scale <- n_query / max_queries
+      qi <- with_seed(seed, sort(sample.int(n_query, max_queries)))
+      query_sample <- paste0(prefix, ".pass1.queries.fasta")
+      write_fasta_subset(query_db, qi, query_sample)
+      message(sprintf(
+        "  round3 sampling: %d of %d queries (scale %.2f), min_support %g",
+        max_queries, n_query, scale, min_support))
+
+      cp1_file <- paste0(prefix, ".pass1.tsv")
+      blast_cp_stream(query = query_sample, db = blast_db, subjects = blast_db,
+                      out_file = cp1_file, method = method, scale = scale,
+                      evalue = evalue, max_target_seqs = max_target_seqs,
+                      strand = strand, min_length = min_length,
+                      min_identity = min_identity, mc.cores = mc.cores,
+                      keep_hits = keep_hits)
+      cp1 <- read_cp_table(cp1_file)
+
+      # Unresolved: too little observed support to trust the estimate, plus
+      # every subject that produced no profile at all in the sample.
+      resolved <- cp1$id[!is.na(cp1$support) & cp1$support >= min_support]
+      pass2_ids <- setdiff(fasta_ids(blast_db), resolved)
+
+      if (length(pass2_ids) == 0) {
+        cp_all <- cp1
+      } else {
+        message(sprintf("  round3 pass 2: resolving %d of %d subjects exactly",
+                        length(pass2_ids), length(resolved) + length(pass2_ids)))
+        subj_ids <- fasta_ids(blast_db)
+        subj_fa <- paste0(prefix, ".pass2.subjects.fasta")
+        write_fasta_subset(blast_db, match(pass2_ids, subj_ids), subj_fa)
+        system(paste("makeblastdb -in", shQuote(subj_fa), "-dbtype nucl",
+                     "-out", shQuote(subj_fa)), intern = TRUE)
+        cp2_file <- paste0(prefix, ".pass2.tsv")
+        blast_cp_stream(query = query_db, db = subj_fa, subjects = subj_fa,
+                        out_file = cp2_file, method = method, scale = 1,
+                        evalue = evalue, max_target_seqs = max_target_seqs,
+                        strand = strand, min_length = min_length,
+                        min_identity = min_identity, mc.cores = mc.cores)
+        cp2 <- read_cp_table(cp2_file)
+        cp_all <- rbind(cp1[!(cp1$id %in% cp2$id), , drop = FALSE], cp2)
+      }
+      write.table(cp_all, paste0(out_cp_file, ".tmp"), sep = "\t",
+                  quote = FALSE, row.names = FALSE)
+      if (!file.rename(paste0(out_cp_file, ".tmp"), out_cp_file)) {
+        stop("could not create ", out_cp_file)
+      }
+    } else {
+      blast_cp_stream(query = query_db, db = blast_db, subjects = blast_db,
+                      out_file = out_cp_file, method = method, scale = 1,
+                      evalue = evalue, max_target_seqs = max_target_seqs,
+                      strand = strand, min_length = min_length,
+                      min_identity = min_identity, mc.cores = mc.cores,
+                      keep_hits = keep_hits)
     }
   }
 
-  cp_df <- read.table(out_cp_file, header = TRUE, sep = "\t",
-                      colClasses = c("character", "numeric"),
-                      na.strings = "NA", stringsAsFactors = FALSE)
+  cp_df <- read_cp_table(out_cp_file)
   if (nrow(cp_df) == 0) {
-    return(list(cp_vals = NULL, cp_file = out_cp_file))
+    return(list(cp_vals = NULL, cp_file = out_cp_file, pass2_ids = pass2_ids))
   }
   cp_vals <- setNames(cp_df$cp, cp_df$id)
-  return(list(cp_vals = cp_vals, cp_file = out_cp_file))
+  return(list(cp_vals = cp_vals, cp_file = out_cp_file, pass2_ids = pass2_ids))
 }
 
 process_region_files <- function(file_list, side, mcmc_seed = 42, n_beast_iter = 1) {
@@ -1658,7 +1781,8 @@ make_detection_worker <- function(detection_fun, cls, seq_upstream, seq_downstre
 }
 
 
-round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
+round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads,
+                   max_queries = 0, min_support = 30, seed = 42) {
   message("\n---- Identification of elements - Round 3 ----")
 
   # Retrieve fasta files for upstream and downstream regions.
@@ -1706,14 +1830,20 @@ round3 <- function(contig_dir, output, tir_flank_coordinates, gr_fin, threads) {
       out_cp_file = cp_upstream,
       blast_db    = upstream_db,
       method      = swt_pt_method(cls),
-      mc.cores    = threads
+      mc.cores    = threads,
+      max_queries = max_queries,
+      min_support = min_support,
+      seed        = seed
     )
     cp_detect_info_down <- run_blast_tir_analysis(
       query_db    = downstream_db,
       out_cp_file = cp_downstream,
       blast_db    = downstream_db,
       method      = swt_pt_method(cls),
-      mc.cores    = threads
+      mc.cores    = threads,
+      max_queries = max_queries,
+      min_support = min_support,
+      seed        = seed
     )
 
     cp_up <- cp_detect_info_up$cp_vals

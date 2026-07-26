@@ -138,18 +138,23 @@ def cp_win200(cov):
         m1  <- window mean ending at swp; m2 <- window mean starting at swp+1
         cp  <- which.max((m2 + 1)/(m1 + 2)) + W
         keep if mcov1 < 3 & mcov2 > 8 | mcov1 < 2 & mcov2 > 6
+
+    Returns (cp or None, mcov2), where mcov2 -- the element-side coverage at
+    the best candidate -- is reported even when the thresholds reject it, so
+    the caller can tell "confidently not a switch point" from "too little data
+    to say" (see --scale).
     """
     W = 200
     L = cov.size
     if L < 500:
-        return None
+        return None, float("nan")
     # csum[i] = sum of positions 1..i, so a window (a..b] is csum[b] - csum[a].
     csum = np.empty(L + 1, dtype=np.float64)
     csum[0] = 0.0
     np.cumsum(cov, dtype=np.float64, out=csum[1:])
     swp = np.arange(W, L - 200 + 1, dtype=np.int64)   # 1-based positions
     if swp.size == 0:
-        return None
+        return None, float("nan")
     m1 = (csum[swp] - csum[swp - W]) / W
     m2 = (csum[swp + W] - csum[swp]) / W
     k = int(np.argmax((m2 + 1.0) / (m1 + 2.0)))       # R which.max: first max
@@ -157,8 +162,8 @@ def cp_win200(cov):
     mcov1 = m1[k]
     mcov2 = m2[k]
     if (mcov1 < 3 and mcov2 > 8) or (mcov1 < 2 and mcov2 > 6):
-        return cp
-    return None
+        return cp, mcov2
+    return None, mcov2
 
 
 def cp_cumsum(cov):
@@ -175,11 +180,13 @@ def cp_cumsum(cov):
       * m2 divides by (L - i) rather than (L - i + 1), so it is the mean of
         positions i..L over one element too few, and is Inf at i = L. The edge
         zeroing below hides that from which.max.
+
+    Returns (cp or None, mcov2); see cp_win200() on the second element.
     """
     W = 200
     L = cov.size
     if L < 500:
-        return None
+        return None, float("nan")
     pos = np.arange(1, L + 1, dtype=np.float64)
     sl = np.cumsum(cov, dtype=np.float64)
     sr = np.cumsum(cov[::-1], dtype=np.float64)[::-1]
@@ -190,18 +197,18 @@ def cp_cumsum(cov):
     m12[:W] = 0.0            # R: m12[1:W] <- 0
     m12[L - W - 1:] = 0.0    # R: m12[(L-W):L] <- 0
     if not np.any(np.isfinite(m12)):
-        return None
+        return None, float("nan")
     cp = int(np.nanargmax(m12)) + 1   # R which.max skips NA/NaN
     j = cp - W                        # R: m1[cp - W], 1-based
     if j < 1:
         # R would index with a negative subscript here and error out; the edge
         # zeroing above makes this unreachable for L >= 500.
-        return None
+        return None, float("nan")
     mcov1 = m1[j - 1]
     mcov2 = m2[j - 1]
     if (mcov1 < 3 and mcov2 > 20) or (mcov1 < 2 and mcov2 > 10):
-        return cp
-    return None
+        return cp, mcov2
+    return None, mcov2
 
 
 METHODS = {"win200": cp_win200, "cumsum": cp_cumsum}
@@ -235,6 +242,11 @@ def parse_args(argv=None):
                    help="keep hits with evalue < this (needs the evalue column)")
     p.add_argument("--min-sstart", type=float, default=12,
                    help="keep hits with sstart > this")
+    p.add_argument("--scale", type=float, default=1.0,
+                   help="multiply the coverage profile by this before the "
+                        "switch-point test. Set to N/Q when the queries are a "
+                        "random Q-of-N sample, so the absolute thresholds "
+                        "still refer to full-set coverage (docs/round3_scaling.md P2)")
     p.add_argument("--no-self-filter", action="store_true",
                    help="keep hits whose query and subject accessions match "
                         "(filter_blast3 drops them)")
@@ -263,6 +275,9 @@ def main(argv=None):
         log("note: no pident column - identity filtering is left to BLAST")
     if args.max_evalue is not None and "evalue" not in idx_of:
         sys.exit("--max-evalue needs the evalue column in --columns")
+
+    if args.scale <= 0:
+        sys.exit("--scale must be positive")
 
     names, max_len = scan_fasta(args.subjects)
     if not names:
@@ -384,7 +399,10 @@ def main(argv=None):
     out = sys.stdout if args.out == "-" else open(args.out, "w")
     n_cp = n_profiles = 0
     try:
-        out.write("id\tcp\n")
+        # support = the element-side coverage behind the call, in *observed*
+        # (unscaled) units: how many sampled relatives actually back it. The
+        # caller uses it to decide which subjects need an exact second pass.
+        out.write("id\tcp\tsupport\n")
         for i, name in enumerate(names):
             row = flat[i * stride:(i + 1) * stride]
             if not row.any():
@@ -397,11 +415,12 @@ def main(argv=None):
             # the profile stops at the last covered base, not the subject length.
             cov = cov[:nz[-1] + 1]
             n_profiles += 1
-            cp = method(cov)
+            cp, mcov2 = method(cov * args.scale if args.scale != 1.0 else cov)
+            support = "NA" if mcov2 != mcov2 else "%.3f" % (mcov2 / args.scale)
             if cp is None:
-                out.write("%s\tNA\n" % name)
+                out.write("%s\tNA\t%s\n" % (name, support))
             else:
-                out.write("%s\t%d\n" % (name, cp))
+                out.write("%s\t%d\t%s\n" % (name, cp, support))
                 n_cp += 1
     finally:
         if out is not sys.stdout:

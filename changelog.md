@@ -26,6 +26,18 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   implementation's switch points exactly, across predicate edge cases, random
   coverage profiles for both switch-point methods, and a real self-BLAST.
 - New runtime dependency: `numpy`.
+- New `--max_round3_queries N` (default 0 = off, i.e. the exact path). Above
+  that many copies, a class runs its Round-3 self-BLAST on a random N-query
+  sample with the coverage scaled back up, and every subject whose sampled
+  support falls below `min_support` (default 30) is then re-resolved exactly
+  against the full query set in a cheap second pass over just those subjects.
+  BLAST cost for the CACTA class is linear in query count (measured), so at
+  the recommended `--max_round3_queries 20000` that class costs ~23% of the
+  exact run (~2.3 h instead of ~10 h). Sampling is not free: measured on
+  MuDR/Mutator at a comparable sampling fraction, switch points move by <=10 bp
+  for 96% of subjects but ~4% change between called and not-called. Numbers,
+  calibration and the known limitation of the support gate are in
+  `docs/round3_scaling.md` 11.
 - Known issue documented, not changed: `find_switch_point_from_blast_coverage3`
   (used for EnSpm/CACTA) reads its QC thresholds 200 bp before the switch point
   it detected. `blast_cp.py` reproduces the behaviour deliberately; see

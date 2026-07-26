@@ -14,7 +14,13 @@ options_list <- list(
               help = "random seed for reproducibility", default = 42),
   make_option(c("-n", "--n_beast_iter"), action = "store", type = "integer",
               help = "number of BEAST iterations with different random seeds (default=1, max=10)",
-              default = 1)
+              default = 1),
+  make_option(c("-q", "--max_round3_queries"), action = "store", type = "integer",
+              help = paste("cap the number of query sequences in the Round-3",
+                           "self-BLAST; classes above it are run on a random",
+                           "sample and under-supported subjects are resolved",
+                           "exactly in a second pass (0 = no cap, default)"),
+              default = 0)
 )
 
 parser <- OptionParser(option_list = options_list)
@@ -78,7 +84,8 @@ tryCatch({
   ####                            THIRD ROUND OF DETECTION                            ####
   ########################################################################################
   round3_results <- round3(opt$contig_dir, opt$output, tir_flank_coordinates, gr_fin,
-                           opt$threads)
+                           opt$threads, max_queries = opt$max_round3_queries,
+                           seed = opt$seed)
   gr3 <- round3_results$gr3
   gr3_unique <- round3_results$gr3_unique
   gr_fin <- round3_results$gr_fin

@@ -64,16 +64,18 @@ py_cp <- function(full_file, subjects_fa, method, columns = "std",
   if (!is.null(max_evalue)) args <- c(args, "--max-evalue", format(max_evalue))
   st <- system2(BLAST_CP, args, stdout = FALSE, stderr = FALSE)
   if (!identical(as.integer(st), 0L)) fail(paste("blast_cp.py exited", st))
-  df <- read.table(out, header = TRUE, sep = "\t",
-                   colClasses = c("character", "numeric"), na.strings = "NA")
+  df <- read_cp_table(out)
   if (nrow(df) == 0) return(setNames(numeric(0), character(0)))
   sort_cp(setNames(df$cp, df$id))
 }
 
 sort_cp <- function(x) {
-  x <- as.numeric(x)[order(names(x))]
-  names(x) <- sort(names(x))
-  x
+  if (length(x) == 0) return(setNames(numeric(0), character(0)))
+  nm <- names(x)
+  if (is.null(nm)) fail("sort_cp: cp vector has no names")
+  out <- as.numeric(x)[order(nm)]      # as.numeric() drops names, so re-attach
+  names(out) <- nm[order(nm)]          # them from the same ordering
+  out
 }
 
 # Named numeric vectors are compared by name set and value, NA == NA.
@@ -305,6 +307,100 @@ if (blastn_bin == "" || mkdb_bin == "") {
   if (!cp_equal(sort_cp(res$cp_vals), sort_cp(res2$cp_vals)))
     fail("Part 3: cached cp table was not reused")
   ok("existing cp table is reused without re-running BLAST")
+}
+
+# ---------------------------------------------------------------------------
+message("=== Part 4: query sampling + exact second pass (P2) ===")
+
+if (blastn_bin == "" || mkdb_bin == "") {
+  message("  skip: blastn/makeblastdb not on PATH")
+} else {
+  # Two families plus singletons, so subjects differ in how many relatives
+  # support them: family A is well covered even in a small query sample, while
+  # family B and the singletons are exactly the under-supported subjects that
+  # sampling would get wrong and the second pass has to rescue.
+  set.seed(3)
+  rnd <- function(n) paste(sample(c("A","C","G","T"), n, replace = TRUE), collapse = "")
+  mutate <- function(s, rate = 0.03) {
+    ch <- strsplit(s, "")[[1]]
+    hit <- which(runif(length(ch)) < rate)
+    ch[hit] <- sample(c("A","C","G","T"), length(hit), replace = TRUE)
+    paste(ch, collapse = "")
+  }
+  element_a <- rnd(1200)
+  element_b <- rnd(1200)
+  n_a <- 50; n_b <- 6; n_single <- 4
+  n_copies <- n_a + n_b + n_single
+  seqs <- character()
+  for (i in seq_len(n_a))
+    seqs[paste0("a", i)] <- paste0(rnd(sample(900:1400, 1)), mutate(element_a))
+  for (i in seq_len(n_b))
+    seqs[paste0("b", i)] <- paste0(rnd(sample(900:1400, 1)), mutate(element_b))
+  for (i in seq_len(n_single))
+    seqs[paste0("s", i)] <- rnd(sample(2100:2600, 1))
+  wd4 <- tempfile(); dir.create(wd4)
+  fa4 <- file.path(wd4, "regions.fasta")
+  writeXStringSet(DNAStringSet(seqs), fa4)
+  system2(mkdb_bin, c("-in", fa4, "-dbtype", "nucl"), stdout = FALSE, stderr = FALSE)
+
+  run_p2 <- function(tag, max_queries, min_support) {
+    run_blast_tir_analysis(
+      query_db = fa4, out_cp_file = file.path(wd4, paste0(tag, ".tsv")),
+      blast_db = fa4, method = "win200", evalue = "1e-10", strand = "plus",
+      min_length = 150, min_identity = 80, mc.cores = 1,
+      max_queries = max_queries, min_support = min_support, seed = 42)
+  }
+
+  # Reference: every sequence used as a query (max_queries = 0).
+  exact <- run_p2("exact", 0, 30)
+  cp_exact <- sort_cp(exact$cp_vals)
+  if (sum(!is.na(cp_exact)) < 10)
+    fail("Part 4: fixture produced too few switch points to be a real test")
+  if (length(exact$pass2_ids) != 0)
+    fail("Part 4: max_queries = 0 must not trigger sampling")
+  ok(sprintf("max_queries = 0 is the exact path (%d subjects, %d switch points)",
+             length(cp_exact), sum(!is.na(cp_exact))))
+
+  # min_support = Inf sends every subject to pass 2, which BLASTs the FULL
+  # query set against them -- so the merged result must equal the exact run.
+  # This is the load-bearing invariant: pass 2 is not an approximation.
+  all_p2 <- run_p2("allpass2", 15, Inf)
+  if (length(all_p2$pass2_ids) != length(cp_exact) &&
+      length(all_p2$pass2_ids) < n_copies - 5)
+    fail(sprintf("Part 4: expected ~every subject in pass 2, got %d",
+                 length(all_p2$pass2_ids)))
+  cp_report(cp_exact, sort_cp(all_p2$cp_vals),
+            "Part 4 pass-2-only (min_support = Inf)")
+
+  # Realistic setting: sample 15 of 60 queries, resolve the under-supported
+  # ones exactly. min_support is 4 here rather than the production default of
+  # 30 because observed support cannot exceed the 15 sampled queries; the
+  # point is the mix of pass-1 and pass-2 subjects, not the exact cut-off.
+  # Subject sets must match the exact run, and every subject that went through
+  # pass 2 must carry the exact run's answer.
+  sampled <- run_p2("sampled", 15, 4)
+  cp_s <- sort_cp(sampled$cp_vals)
+  if (!identical(names(cp_exact), names(cp_s)))
+    fail("Part 4: sampled run covers a different subject set than the exact run")
+  ok(sprintf("sampled run covers the same %d subjects", length(cp_s)))
+
+  if (length(sampled$pass2_ids) == 0)
+    fail("Part 4: fixture never exercised pass 2 - lower min_support or widen the copy-number spread")
+  p2 <- intersect(sampled$pass2_ids, names(cp_exact))
+  if (!identical(as.numeric(cp_exact[p2]), as.numeric(cp_s[p2])))
+    fail("Part 4: pass-2 subjects disagree with the exact run")
+  ok(sprintf("%d pass-2 subjects match the exact run exactly", length(p2)))
+
+  # Sampling does move some switch points (the argmax is estimated from fewer
+  # relatives). Quantify it here rather than assert a bound: on a 60-sequence
+  # fixture at a 1-in-4 sample the noise is far worse than in production. The
+  # measurement that matters is on real data -- docs/round3_scaling.md P2.
+  both <- !is.na(cp_exact) & !is.na(cp_s)
+  d <- abs(cp_exact[both] - cp_s[both])
+  message(sprintf(
+    "  note: %d subjects called in both; |delta cp| median %.0f max %.0f; %d flipped to/from NA",
+    sum(both), if (any(both)) median(d) else 0, if (any(both)) max(d) else 0,
+    sum(xor(is.na(cp_exact), is.na(cp_s)))))
 }
 
 message("ALL ROUND-3 SWITCH-POINT IDENTITY TESTS PASSED")

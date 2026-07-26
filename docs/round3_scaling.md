@@ -271,7 +271,8 @@ validated against real data at real scale without repeating the 10 h BLAST.
    added to the run deps. Fixes the crash.~~ **done, §10**
 2. ~~**P1** — column pushdown, `-perc_identity`, drop the dead evalue filter,
    direct piping. Cheap, no semantic change.~~ **done, §10**
-3. **P2** — query subsampling + adaptive second pass, default off.
+3. ~~**P2** — query subsampling + adaptive second pass, default off.~~
+   **done, §11**
 4. Separately: the `…coverage3` index bug and the CAP3 splitting default (§8).
 
 ## 8. Adjacent findings (separate from the BLAST work)
@@ -406,3 +407,115 @@ Notes for whoever picks up P2:
 - The parser is single-process by design: it sustains ~1.5 M rows/s on the
   6-column layout, roughly 20× faster than `blastn` produced hits in
   run-000129, so threading it would only add complexity.
+
+## 11. Implementation notes (P2, landed)
+
+`--max_round3_queries N` (`dante_tir.py` → `detect_tirs.R` → `round3()` →
+`run_blast_tir_analysis()`) caps how many sequences are used as queries in the
+Round-3 self-BLAST. **Default 0 = no cap**, i.e. the exact path; a class with
+fewer copies than the cap is unaffected, so enabling it changes nothing except
+for the classes that are actually too big.
+
+Above the cap:
+
+1. **Pass 1** BLASTs a random Q-of-N sample of the queries (seeded from
+   `--seed`, so it is reproducible) against the full database, and scales the
+   coverage profiles by N/Q — an unbiased estimate of the full coverage, so
+   the absolute thresholds keep their meaning.
+2. `blast_cp.py` reports, next to each cp, the **support**: the element-side
+   coverage behind the call in *observed* (unscaled) units, i.e. how many
+   sampled relatives actually back it.
+3. **Pass 2** re-resolves every subject with `support < min_support` (default
+   30), plus every subject that produced no profile at all, by BLASTing the
+   **full** query set against a database holding only those subjects. For them
+   the answer is not an estimate: it is what the unsampled path would produce.
+   It is cheap because BLAST cost scales with database size.
+
+### Measured cost
+
+BLAST cost for the CACTA class is linear in the query count (q500/q2000
+samples against the full 168k database, 14 threads):
+
+| queries | hits | CPU-min | CPU-min per query |
+|---|---|---|---|
+| 500 | 7,960,733 | 40.1 | 0.0801 |
+| 2,000 | 32,100,791 | ~153 | 0.0765 |
+
+Extrapolating: 168,012 queries ≈ 216 CPU-h, which matches the 13 h × ~25
+effective cores the production run actually spent. Hit volume scales exactly
+(4.03× hits for 4× queries).
+
+Combined with the measured support distribution of the CACTA class (median
+element-side support **5,881**, p5 = 30 — the oversaturation from §2.1 seen
+directly), the predicted pass-2 fraction and total cost are:
+
+| Q | scale | pass 2 (at min_support 30) | total cost vs exact |
+|---|---|---|---|
+| 5,000 | 33.6 | 19.6 % | ~23 % |
+| 10,000 | 16.8 | 14.1 % | ~20 % |
+| **20,000** | **8.4** | **11.2 %** | **~23 %** |
+| 40,000 | 4.2 | 8.6 % | ~33 % |
+
+The optimum is flat between Q = 5k and 20k; **Q = 20,000 is the recommended
+setting** (~4× faster than exact, ~2.3 h instead of ~10 h for this class),
+because it also carries the least sampling noise of the cheap options.
+
+### Measured quality
+
+Measured on MuDR/Mutator upstream from the same run (11,260 copies — small
+enough to run exactly, 19.3 min), sampling 2,000 queries (17.8 %):
+
+| | exact | sampled |
+|---|---|---|
+| switch points | 8,400 | 8,323 |
+| called in both | — | 8,175 |
+| lost / gained | — | 225 / 148 |
+| \|Δcp\| = 0 | — | 61.5 % |
+| \|Δcp\| ≤ 10 bp | — | 96.4 % |
+| \|Δcp\| ≤ 50 bp | — | 99.3 % |
+
+Positions barely move (p95 = 9 bp, and Round 3 searches ±200 bp around cp), but
+**~4 % of subjects change between called and not-called**. Sampling is not
+free, and this is the number to weigh against the speedup.
+
+Two caveats in opposite directions. This is a *pessimistic* stand-in for the
+class that matters: MuDR subjects carry roughly a tenth of CACTA's support, so
+the same query fraction leaves CACTA far better determined. But it is also a
+class that would never be sampled in practice — at the recommended cap of
+20,000 it falls below the threshold and runs exactly.
+
+Calibration of `min_support` on that data (pass-1 estimate vs the exact
+answer, by observed support):
+
+| support | n | called↔NA flip | \|Δcp\| ≤ 10 bp |
+|---|---|---|---|
+| 1–2 | 595 | 37 % | 52 % |
+| 2–5 | 798 | 29 % | 69 % |
+| 5–10 | 1,092 | 15 % | 84 % |
+| 10–20 | 1,464 | 10 % | 89 % |
+| 20–30 | 1,002 | 8 % | 92 % |
+| 30–60 | 1,589 | 8 % | 91 % |
+| 60–150 | 3,255 | 4 % | 94 % |
+| ≥150 | 1,088 | 9 % | 95 % |
+
+The flip rate falls steeply up to support ≈ 10 and then **plateaus at 4–9 %
+instead of going to zero** — raising `min_support` does not buy the rest.
+That residue is not element-side noise, which is what the gate measures. It is
+almost certainly the *flank*-side test: `mcov1 < 3` in scaled units means the
+sampled flank coverage must be under 3·Q/N ≈ 0.5, a quantity estimated from a
+handful of alignments, so subjects whose true flank coverage sits near the
+threshold are close to a coin flip however deep the element side is.
+
+**The obvious next refinement** is therefore to have `blast_cp.py` report
+`mcov1` as well and send a subject to pass 2 when *either* threshold is within
+a noise band of its boundary, rather than gating on element-side support
+alone. That was not done here: it adds a second calibration nobody has data
+for on the target class, and the current gate is already conservative.
+
+### What P2 does not do
+
+On a mid-size class the two-pass scheme is close to a wash: the same
+experiment on MuDR took 17.4 min sampled vs 19.3 min exact (10 %), because at
+a 71 MB database BLAST's fixed costs dominate and 47 % of subjects fell below
+`min_support` anyway. The win is specific to genuinely oversaturated
+mega-families, which is exactly the population the cap selects.

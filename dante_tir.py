@@ -69,6 +69,16 @@ def main():
         '--n_beast_iter', help='Number of BEAST iterations with different random seeds for TIR detection (default=1, max=10)',
         type=int, default=1
     )
+    parser.add_argument(
+        '--max_round3_queries',
+        help='Cap the number of query sequences in the Round-3 self-BLAST. '
+             'Classes with more copies are run on a random sample of that size '
+             '(coverage is scaled back up), and subjects with too little '
+             'sampled support are then resolved exactly against the full query '
+             'set. Bounds the quadratic self-BLAST on high-copy superfamilies; '
+             '0 = no cap (default)',
+        type=int, default=0
+    )
 
     print("--------------------------------------------------------")
     print("")
@@ -86,6 +96,9 @@ def main():
     # Validate n_beast_iter parameter
     if args.n_beast_iter < 1 or args.n_beast_iter > 10:
         parser.error("--n_beast_iter must be between 1 and 10 (default=1)")
+
+    if args.max_round3_queries < 0:
+        parser.error("--max_round3_queries must be >= 0 (0 = no cap)")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     # set random seed for reproducibility
@@ -326,7 +339,8 @@ def main():
     cmd = (F'{script_dir}/detect_tirs.R --contig_dir {args.working_dir} --output '
            F'{args.working_dir} --threads {args.cpu} '
            F'--genome {args.fasta} --seed {args.seed} '
-           F'--n_beast_iter {args.n_beast_iter}')
+           F'--n_beast_iter {args.n_beast_iter} '
+           F'--max_round3_queries {args.max_round3_queries}')
 
     print(f"\nRunning TIR detection (logs in {log_dir})...")
     with open(stdout_log, 'w') as stdout_f, open(stderr_log, 'w') as stderr_f:
