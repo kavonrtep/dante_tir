@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Fix a hang on large inputs: `cluster_aa_sequences_mmseqs2` and
+  `make_blast_db` ran their child processes with `subprocess.check_call(...,
+  stdout=PIPE, stderr=PIPE)`. `check_call` waits without ever reading those
+  pipes, so the child blocks forever once it writes past the 64 KB pipe buffer
+  -- `mmseqs easy-cluster` reached that on real data and deadlocked the whole
+  run in `pipe_write`. mmseqs now goes through `subprocess.run` (which drains
+  while waiting) and reports its stderr when clustering fails; `makeblastdb`
+  discards its output via `DEVNULL`. Added `tests/test_subprocess_pipes.py`
+  (in `tests/unit.sh`) to keep the pattern from coming back.
+
 ## 0.2.8 — 2026-07-21
 
 Round-3 memory fix plus a release guard.

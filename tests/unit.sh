@@ -6,4 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 echo "=== unit: extract_flanking_regions streaming == dict (OOM fix) ==="
 python3 "$ROOT/tests/test_extract_flanking_regions.py"
 
+echo
+echo "=== unit: no blocking subprocess call pipes its child's output ==="
+python3 "$ROOT/tests/test_subprocess_pipes.py"
+
 echo "unit tests OK"

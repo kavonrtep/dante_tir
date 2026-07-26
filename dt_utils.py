@@ -1338,14 +1338,23 @@ def cluster_aa_sequences_mmseqs2(aa_fasta_files: Dict[str, str],
                 F'--threads {num_threads}'
             )
 
-            subprocess.check_call(cmd, shell=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE)
+            # subprocess.run drains the pipes while it waits; check_call does
+            # not, so with stdout/stderr=PIPE it deadlocks as soon as mmseqs
+            # writes more than the 64 KB pipe buffer (easy-cluster is a chain
+            # of sub-commands and passes that on larger inputs).
+            proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, cmd,
+                                                    proc.stdout, proc.stderr)
 
             # Store the directory containing the output files
             mmseqs_output_dirs[cls] = os.path.dirname(mmseqs_output_prefix)
 
         except subprocess.CalledProcessError as e:
             print(F'Error clustering {class_name} with mmseqs2: {e}')
+            if e.stderr:
+                print(e.stderr.decode(errors='replace').strip()[-2000:])
             continue
         finally:
             # Clean up temporary directory
@@ -1514,7 +1523,10 @@ def make_blast_db(fasta_file: str, dbtype: str = 'nucl'):
     :return: None
     """
     cmd = F'makeblastdb -in {fasta_file} -dbtype {dbtype}'
-    # capture output
-    p = subprocess.check_call(cmd, shell=True, stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE)
+    # Discard the output rather than piping it: nothing reads it, and an
+    # undrained pipe deadlocks check_call once the child writes more than the
+    # 64 KB buffer (makeblastdb warns per offending sequence id, so a database
+    # with many sequences can get there).
+    subprocess.check_call(cmd, shell=True, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL)
     return None
