@@ -403,4 +403,68 @@ if (blastn_bin == "" || mkdb_bin == "") {
     sum(xor(is.na(cp_exact), is.na(cp_s)))))
 }
 
+# ---------------------------------------------------------------------------
+message("=== Part 5: the query sample is deterministic ===")
+
+# The sample must depend on the seed and the input alone. These are the two
+# ways it could silently stop doing so.
+draw <- function(seed) with_seed(seed, sort(sample.int(10000, 50)))
+
+if (!identical(draw(42), draw(42)))
+  fail("Part 5: same seed drew a different sample")
+ok("same seed draws the same queries")
+
+if (identical(draw(42), draw(43)))
+  fail("Part 5: different seeds drew the same sample (seed is being ignored)")
+ok("a different seed draws a different sample")
+
+# 1. The caller's position in the RNG stream must not leak in.
+set.seed(1); invisible(runif(1)); a <- draw(42)
+set.seed(9); invisible(runif(1000)); b <- draw(42)
+if (!identical(a, b))
+  fail("Part 5: the sample depends on preceding RNG use")
+ok("preceding RNG use does not change the sample")
+
+# 2. Neither must the generator in force -- parallel code often switches the
+#    process to L'Ecuyer-CMRG, and R changed the default sampler in 3.6.
+old_kind <- RNGkind()
+RNGkind("L'Ecuyer-CMRG")
+c_ecuyer <- draw(42)
+suppressWarnings(RNGkind(kind = old_kind[1], normal.kind = old_kind[2],
+                         sample.kind = old_kind[3]))
+if (!identical(a, c_ecuyer))
+  fail("Part 5: the sample depends on the RNGkind in force")
+ok("the sample is independent of RNGkind()")
+
+# 3. with_seed must leave the caller's RNG exactly as it found it.
+set.seed(7)
+before <- get(".Random.seed", envir = .GlobalEnv)
+invisible(draw(42))
+if (!identical(before, get(".Random.seed", envir = .GlobalEnv)))
+  fail("Part 5: with_seed disturbed the caller's RNG stream")
+if (!identical(old_kind, RNGkind()))
+  fail("Part 5: with_seed left RNGkind() changed")
+ok("with_seed restores the caller's RNG stream and generator")
+
+# 4. End to end: the same seed must reproduce the cp table byte for byte, and
+#    a different seed must still describe the same subjects.
+if (blastn_bin == "" || mkdb_bin == "") {
+  message("  skip: blastn/makeblastdb not on PATH")
+} else {
+  again <- run_p2("sampled_again", 15, 4)
+  first <- readLines(file.path(wd4, "sampled.tsv"))
+  if (!identical(first, readLines(file.path(wd4, "sampled_again.tsv"))))
+    fail("Part 5: re-running with the same seed produced a different cp table")
+  ok("a re-run with the same seed reproduces the cp table byte for byte")
+
+  other <- run_blast_tir_analysis(
+    query_db = fa4, out_cp_file = file.path(wd4, "seed99.tsv"), blast_db = fa4,
+    method = "win200", evalue = "1e-10", strand = "plus", min_length = 150,
+    min_identity = 80, mc.cores = 1, max_queries = 15, min_support = 4,
+    seed = 99)
+  if (!identical(sort(names(other$cp_vals)), sort(names(exact$cp_vals))))
+    fail("Part 5: a different seed changed which subjects are described")
+  ok("a different seed still covers the same subjects")
+}
+
 message("ALL ROUND-3 SWITCH-POINT IDENTITY TESTS PASSED")

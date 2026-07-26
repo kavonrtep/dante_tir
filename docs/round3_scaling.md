@@ -512,6 +512,37 @@ a noise band of its boundary, rather than gating on element-side support
 alone. That was not done here: it adds a second calibration nobody has data
 for on the target class, and the current gate is already conservative.
 
+### Reproducibility
+
+Sampling introduces the only randomness in Round 3, so it is pinned end to end.
+A sampled run is a deterministic function of (input, `--seed`,
+`--max_round3_queries`, `min_support`):
+
+- **The draw depends on `--seed` and the input alone.** `with_seed()` fixes the
+  generator explicitly (`Mersenne-Twister` / `Inversion` / `Rejection`) rather
+  than inheriting it. Both leaks this closes are real: R changed the default
+  sampler in 3.6, and `parallel` code commonly switches the process to
+  `L'Ecuyer-CMRG` — under which `set.seed(42)` demonstrably draws a *different*
+  sample (verified, `tests/test_round3_cp.R` Part 5). The caller's RNG stream
+  and generator are restored afterwards, so nothing downstream shifts either.
+- **The sample is recorded in the log.** Each sampled class logs its seed and a
+  fingerprint of the drawn indices (`n`, sum, first, last) to `log/stderr.txt`,
+  which survives without `--debug` — the sampled query FASTA itself lives in
+  `working_dir` and does not. Two runs can be confirmed to have used the same
+  queries from the logs alone.
+- **Thread count does not change results.** The profile is an accumulation of
+  integer counts, which is order-independent, so however `blastn` interleaves
+  its output the profile and the switch points are the same. Verified on real
+  data: 200 MuDR queries against the full 11,260-sequence database at
+  `-num_threads 1` and `-num_threads 8` produce byte-identical cp tables
+  (172 s vs 34 s).
+- **Pass 2 membership is a deterministic function of pass 1**, and each pass
+  caches its own cp table, so a restart resumes rather than redraws.
+
+Verified end to end in Part 5: re-running with the same seed reproduces the cp
+table byte for byte; a different seed draws different queries but still
+describes the same subjects.
+
 ### What P2 does not do
 
 On a mid-size class the two-pass scheme is close to a wash: the same

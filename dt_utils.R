@@ -942,15 +942,40 @@ write_fasta_subset <- function(fasta, idx, out_fa) {
   invisible(length(idx))
 }
 
-# Evaluate expr under a fixed seed without disturbing the caller's RNG stream,
-# so the query sample depends only on --seed and not on what ran before it.
+# Evaluate expr under a fixed seed, leaving the caller's RNG exactly as found.
+#
+# The Round-3 query sample must depend on nothing but --seed and the input, so
+# that a re-run, a restart, or a rerun on another machine draws the same
+# queries and reports the same switch points. Two things could otherwise leak
+# in, and both are pinned here:
+#   * the caller's position in the RNG stream (whatever ran before this call);
+#   * the *generator*: R changed the default sampler in 3.6, and parallel code
+#     commonly switches the process to L'Ecuyer-CMRG, either of which would
+#     silently change the draw for the same seed.
 with_seed <- function(seed, expr) {
-  if (exists(".Random.seed", envir = .GlobalEnv)) {
-    old <- get(".Random.seed", envir = .GlobalEnv)
-    on.exit(assign(".Random.seed", old, envir = .GlobalEnv))
-  }
-  set.seed(seed)
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv)
+  if (had_seed) old_seed <- get(".Random.seed", envir = .GlobalEnv)
+  old_kind <- RNGkind()
+  on.exit({
+    suppressWarnings(RNGkind(kind = old_kind[1], normal.kind = old_kind[2],
+                             sample.kind = old_kind[3]))
+    if (had_seed) {
+      assign(".Random.seed", old_seed, envir = .GlobalEnv)
+    } else if (exists(".Random.seed", envir = .GlobalEnv)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  })
+  set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion",
+           sample.kind = "Rejection")
   expr
+}
+
+# A short, stable fingerprint of the drawn sample, logged so that two runs can
+# be confirmed to have used the same queries from log/stderr.txt alone -- the
+# sampled query FASTA itself lives in working_dir and only survives --debug.
+sample_fingerprint <- function(idx) {
+  sprintf("n=%d sum=%.0f first=%d last=%d", length(idx),
+          sum(as.numeric(idx)), idx[1], idx[length(idx)])
 }
 
 run_blast_tir_analysis <- function(
@@ -1007,12 +1032,15 @@ run_blast_tir_analysis <- function(
       # subjects, and BLAST cost scales with database size.
       prefix <- sub("\\.tsv$", "", out_cp_file)
       scale <- n_query / max_queries
+      # sort() so the sampled FASTA keeps input order: the draw fixes *which*
+      # queries are used, never the order they are searched in.
       qi <- with_seed(seed, sort(sample.int(n_query, max_queries)))
       query_sample <- paste0(prefix, ".pass1.queries.fasta")
       write_fasta_subset(query_db, qi, query_sample)
       message(sprintf(
-        "  round3 sampling: %d of %d queries (scale %.2f), min_support %g",
-        max_queries, n_query, scale, min_support))
+        "  round3 sampling: %d of %d queries (scale %.2f), min_support %g, seed %d",
+        max_queries, n_query, scale, min_support, seed))
+      message(sprintf("  round3 sample fingerprint: %s", sample_fingerprint(qi)))
 
       cp1_file <- paste0(prefix, ".pass1.tsv")
       blast_cp_stream(query = query_sample, db = blast_db, subjects = blast_db,

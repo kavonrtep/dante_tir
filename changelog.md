@@ -38,6 +38,15 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   for 96% of subjects but ~4% change between called and not-called. Numbers,
   calibration and the known limitation of the support gate are in
   `docs/round3_scaling.md` 11.
+- Sampled runs are deterministic: the draw is a function of `--seed` and the
+  input alone. The generator is pinned explicitly rather than inherited, which
+  closes a real hole -- under `RNGkind("L'Ecuyer-CMRG")`, which `parallel` code
+  commonly sets, `set.seed()` draws a different sample -- and the caller's RNG
+  stream is left untouched. Each sampled class logs its seed and a fingerprint
+  of the draw to `log/stderr.txt` (which survives without `--debug`, unlike the
+  sampled query FASTA). Thread count does not affect results either: the
+  coverage profile is an order-independent integer accumulation, verified
+  byte-identical at `-num_threads 1` vs `8` on real data.
 - Known issue documented, not changed: `find_switch_point_from_blast_coverage3`
   (used for EnSpm/CACTA) reads its QC thresholds 200 bp before the switch point
   it detected. `blast_cp.py` reproduces the behaviour deliberately; see
