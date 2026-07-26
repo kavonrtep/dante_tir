@@ -31,13 +31,17 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   sample with the coverage scaled back up, and every subject whose sampled
   support falls below `min_support` (default 30) is then re-resolved exactly
   against the full query set in a cheap second pass over just those subjects.
-  BLAST cost for the CACTA class is linear in query count (measured), so at
-  the recommended `--max_round3_queries 20000` that class costs ~23% of the
-  exact run (~2.3 h instead of ~10 h). Sampling is not free: measured on
-  MuDR/Mutator at a comparable sampling fraction, switch points move by <=10 bp
-  for 96% of subjects but ~4% change between called and not-called. Numbers,
-  calibration and the known limitation of the support gate are in
-  `docs/round3_scaling.md` 11.
+  Validated on run-000129: at `--max_round3_queries 20000` that genome's
+  Round 3 finished in 4 h and the pipeline produced 7,831 elements where it had
+  previously produced none, ~7.8x faster than the exact path. Sampling is not
+  free, and on the CACTA class it costs more than the earlier MuDR measurement
+  suggested: 6.1% of switch points lost and 7.7% gained, though at the element
+  level 99.7% of calls land within the +/-200 bp window Round 3 searches and
+  4% of elements rest on a boundary the exact run would not have produced.
+  More sampling buys accurate positions but does not remove the churn, so the
+  exact path (the default) remains the recommendation for a production library.
+  Numbers, calibration and the limits of the support gate are in
+  `docs/round3_scaling.md` 11-12.
 - Sampled runs are deterministic: the draw is a function of `--seed` and the
   input alone. The generator is pinned explicitly rather than inherited, which
   closes a real hole -- under `RNGkind("L'Ecuyer-CMRG")`, which `parallel` code

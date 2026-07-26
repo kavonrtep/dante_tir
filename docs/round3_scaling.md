@@ -4,8 +4,8 @@ Design document for fixing the Round-3 self-BLAST blow-up on very large,
 high-copy genomes. Written against `0.2.8`; supersedes the `awk` prefilter
 introduced in `0.2.7` (commit `dcddcca`).
 
-Status: **P0 and P1 implemented** (see §10); P2 still open. Keep this document
-updated as steps are completed.
+Status: **P0, P1 and P2 implemented** (§10, §11) and validated on run-000129
+(§12). Keep this document updated as steps are completed.
 
 ---
 
@@ -318,12 +318,16 @@ Round 1 found only 75 elements genome-wide and why this genome depends
 entirely on Round 3. A finite default for `--max_class_size`, or a size-based
 auto-split, is warranted independently of everything above.
 
-### 8.3 Other stages not yet stress-tested at this scale
+### 8.3 Other stages not yet stress-tested at this scale — ANSWERED
 
-Round 3's per-element TIR detection, Round 4, and `dante_tir_summary.R`
-(mmseqs clustering) have never run on ~168k elements of one class in this
-pipeline — no evidence of a problem, but no evidence of safety either. Re-run
-run-000129 to completion before assuming Round 3 was the only wall.
+Round 3's per-element TIR detection, Round 4, and the mmseqs clustering had
+never run on ~168k elements of one class. The re-run in §12 took them all the
+way through in three minutes, so Round 3 was indeed the only wall in this
+chain — but only after one more fix: both places that extract TIR sequences
+did `readDNAStringSet(genome)`, which on this 94.3 Gbp assembly asks for
+~94 GB of RAM. They now use indexed access (`genome_fa_handle`,
+`tests/test_genome_access.R`). Neither call had ever been reached before,
+because Round 3 failed first.
 
 ## 9. Open questions
 
@@ -456,9 +460,9 @@ directly), the predicted pass-2 fraction and total cost are:
 | **20,000** | **8.4** | **11.2 %** | **~23 %** |
 | 40,000 | 4.2 | 8.6 % | ~33 % |
 
-The optimum is flat between Q = 5k and 20k; **Q = 20,000 is the recommended
-setting** (~4× faster than exact, ~2.3 h instead of ~10 h for this class),
-because it also carries the least sampling noise of the cheap options.
+The predicted cost column turned out to be **pessimistic** — see §12: pass 2
+is far cheaper than this model assumes, because the subjects it re-resolves
+are precisely the sparse ones.
 
 ### Measured quality
 
@@ -475,17 +479,14 @@ enough to run exactly, 19.3 min), sampling 2,000 queries (17.8 %):
 | \|Δcp\| ≤ 50 bp | — | 99.3 % |
 
 Positions barely move (p95 = 9 bp, and Round 3 searches ±200 bp around cp), but
-**~4 % of subjects change between called and not-called**. Sampling is not
-free, and this is the number to weigh against the speedup.
+**~4 % of subjects change between called and not-called**.
 
-Two caveats in opposite directions. This is a *pessimistic* stand-in for the
-class that matters: MuDR subjects carry roughly a tenth of CACTA's support, so
-the same query fraction leaves CACTA far better determined. But it is also a
-class that would never be sampled in practice — at the recommended cap of
-20,000 it falls below the threshold and runs exactly.
+That was the only quality figure available before the class that motivates
+sampling could be run. It is *not* representative — see §12, where CACTA turns
+out to be about three times worse, not better.
 
-Calibration of `min_support` on that data (pass-1 estimate vs the exact
-answer, by observed support):
+**The gate has a ceiling.** Calibrating `min_support` on the MuDR data
+(pass-1 estimate vs the exact answer, by observed support):
 
 | support | n | called↔NA flip | \|Δcp\| ≤ 10 bp |
 |---|---|---|---|
@@ -550,3 +551,135 @@ experiment on MuDR took 17.4 min sampled vs 19.3 min exact (10 %), because at
 a 71 MB database BLAST's fixed costs dominate and 47 % of subjects fell below
 `min_support` anyway. The win is specific to genuinely oversaturated
 mega-families, which is exactly the population the cap selects.
+
+## 12. What the production re-run showed (run-000129, 2026-07-26)
+
+Rounds 1–4 re-run on run-000129's own working_dir (`dev_scripts/rerun_from_working_dir.sh`,
+96 threads, `--max_round3_queries 20000`). **It completed**, producing 7,831
+elements where the original run produced none: 7,442 EnSpm/CACTA, 293 hAT,
+89 MuDR/Mutator, 7 PIF/Harbinger. Round 3 contributed 5,781 of them, Round 4
+another 1,970, Rounds 1–2 just 80.
+
+### The model was right about volume, wrong about cost
+
+| | predicted | actual |
+|---|---|---|
+| pass-1 hits (CACTA upstream) | 302.2 M | **302.5 M** |
+| pass-2 fraction | 11.2 % | **11.6 %** (19,445 subjects) |
+
+But the cost model assumed pass 2 costs about as much as pass 1 (the full query
+set against an 11.6 % database). Measured: **pass 1 63 min, pass 2 5 min**.
+Pass 2 is ~12× cheaper than modelled because its subjects are the *sparse*
+ones — 8 M hits against pass 1's 302 M — and blastn time follows hit count,
+not database size. Sampling is therefore **~7.8× faster than exact, not the
+~4.3× predicted above**.
+
+Wall clock, Round-3 start to finish (4 h 11 m):
+
+| phase | wall |
+|---|---|
+| CACTA upstream (pass 1 / pass 2) | 68 min (63 + 5) |
+| CACTA downstream (pass 1 / pass 2) | 141 min (133 + 8) |
+| hAT + MuDR + PIF, exact (below the cap) | 39 min |
+| Round 4 + mmseqs clustering + final extraction | 3 min |
+
+Downstream cost twice upstream because it genuinely carried 39 % more hits
+(419 M kept vs 302 M).
+
+### §8.3 answered: no further scaling walls
+
+Round 4, the mmseqs clustering of TIR sequences and the final sequence
+extraction all completed at 168k-element scale, in three minutes. That required
+the FaFile change (`genome_fa_handle`) — on this 94.3 Gbp assembly the previous
+`readDNAStringSet(genome)` would have asked for ~94 GB twice.
+
+### Quality on CACTA — worse than the MuDR stand-in, not better
+
+Sampled vs the exact upstream switch points (recomputed from the original
+run's own 41.5 GB Round-3 output, all 168,012 queries):
+
+| | |
+|---|---|
+| called in both | 86,492 |
+| lost / gained | 5,649 / 7,078 |
+| **churn** | **6.1 % of exact calls lost, 7.7 % gained** |
+| \|Δcp\| = 0 / ≤10 bp / ≤50 bp / ≤200 bp | 60.1 % / 90.1 % / 94.8 % / 98.3 % |
+| p95 / p99 / max \|Δcp\| | 53 bp / 307 bp / 4,954 bp |
+
+§11 predicted the opposite — that CACTA's deeper support would leave it
+*better* determined than MuDR. It is roughly three times worse. The likely
+reason is the method, not the depth: CACTA uses `cp_cumsum`, whose argmax over
+global cumulative means is far more sensitive to profile shape than MuDR's
+local 200 bp windows, and it already piles 13,753 exact calls onto position
+201 (§10).
+
+**Element level is much better than cp level.** Of the 7,442 CACTA elements,
+6,109 join to an exact upstream switch point:
+
+| | elements | |
+|---|---|---|
+| cp identical to exact | 2,753 | 37.0 % |
+| within the ±200 bp search window | 3,337 | 44.8 % |
+| moved beyond that window | 19 | **0.3 %** |
+| rests on a cp the exact run never produced | 301 | 4.0 % |
+
+Median \|Δcp\| = 1 bp, p90 = 3 bp, p99 = 78 bp. Elements are much less affected
+than switch points because an element only survives if TIR *and* TSD detection
+succeed, which needs a well-defined boundary; the marginal boundary-sitters
+that flip in the cp table rarely become elements. What this cannot measure is
+the other direction — elements the exact run would have found and sampling
+missed — which needs the exact run.
+
+### Sampling has a churn floor
+
+Flip rate against how much data a subject actually had (CACTA, pass-1-resolved):
+
+| observed support | n | called↔NA flip | moves >200 bp |
+|---|---|---|---|
+| 30–60 | 4,798 | 10.9 % | 10.7 % |
+| 60–120 | 9,218 | 13.6 % | 4.6 % |
+| 120–250 | 10,704 | 14.2 % | 2.3 % |
+| 250–500 | 17,397 | 10.8 % | 1.2 % |
+| 500–1,000 | 53,099 | 9.5 % | 0.1 % |
+| 1,000–2,000 | 49,425 | 4.6 % | 0.0 % |
+| ≥2,000 | 3,926 | 5.3 % | 0.0 % |
+
+Two different behaviours, and the distinction drives the recommendation:
+
+- **Position errors are cured by more data** — "moves >200 bp" falls from
+  10.7 % to ~0 % as support grows. A larger sample fixes these.
+- **Called/not-called flips are not** — they fall from ~14 % to ~5 % and then
+  flatten, even for subjects with thousands of supporting relatives. That is
+  the signature of subjects sitting *on* the decision boundary, where any
+  perturbation tips the result. A bigger sample shrinks the perturbation but
+  never removes it.
+
+(An attempt to extrapolate churn to other Q from this curve was discarded: it
+bottoms out near 6 % even at Q = N, which is definitionally 0, because observed
+support alone does not capture the large-Q regime. Only the two qualitative
+behaviours above are supported by the data.)
+
+### Pass 2 is exact to 99.93 %, not 100 %
+
+Of the 18,661 pass-2 subjects that appear in both tables, **18,648 (99.93 %)
+match the exact answer**. The 13 that differ are the small-database e-value
+effect flagged when the two-pass scheme was designed: pass 2 searches a
+database ~11 % the size of the full one, so identical alignments get slightly
+different e-values and a marginal hit can cross `-evalue 1e-10`. The synthetic
+test in `tests/test_round3_cp.R` Part 4 asserts exact equality and passes; at
+production scale the claim needs this 0.07 % qualifier.
+
+### Recommendation, revised
+
+Sampling is a screening tool, not the default:
+
+- **For a production library on an extreme genome, run exact**
+  (`--max_round3_queries 0`). That is now possible — it is what P0 bought — and
+  on this genome costs ~28 h for Round 3 (extrapolating the measured pass-1
+  times: ~8.8 h upstream, ~18.6 h downstream), against 4 h sampled.
+- **Use sampling to iterate**: parameter sweeps, pipeline debugging, or a first
+  look at a new genome, where ~7 % switch-point churn and ~4 % of elements
+  resting on boundaries the exact path would not produce are acceptable.
+- **A larger sample does not buy away the churn** — it buys accurate positions.
+  If churn is what matters, exact is the answer, not `--max_round3_queries
+  40000`.
