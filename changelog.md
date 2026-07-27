@@ -1,14 +1,26 @@
-# Changelog
+## 0.3.0 — 2026-07-27
 
-## Unreleased
+The release that makes DANTE_TIR finish on very large, high-copy genomes. On an
+89 Gb assembly with 168,012 EnSpm/CACTA copies, Round 3 previously aborted after
+13 h with `long vectors not supported yet`, having produced nothing; it now
+completes in about 10 h and the pipeline yields a full element set. Most of the
+work below came out of that one run, and every number quoted was measured on it.
 
-Round-3 scaling: the self-BLAST table is never parsed in R at all.
+Two deliberate changes to results, both explained in their entries: the
+EnSpm/CACTA switch-point method had its quality thresholds read at the wrong
+position, and fragmentation is now seeded per sequence rather than from one
+global stream. `--max_class_size` is also on by default now. Small genomes are
+largely unaffected — on the 30 Mb `long` test set, every element found by 0.2.8
+is found again at identical coordinates, plus one more.
+
+### Round 3 no longer materialises the self-BLAST table
 
 - The `awk` reduction added in 0.2.7 kept the Round-3 table off the heap but
   could not shrink it enough: on an 89 Gb genome with 168k EnSpm/CACTA domains
   the *filtered* table was still 41.5 GB / 2.5e9 rows and `read.table` aborted
   with `long vectors not supported yet`. The row count is intrinsic to an
   all-vs-all self-BLAST, so no per-row filter can fix it.
+
 - `run_blast_tir_analysis` now streams `blastn` straight into `blast_cp.py`,
   which applies `filter_blast3`'s predicates, folds each surviving hit into a
   per-subject coverage profile and computes the switch points, returning only
@@ -17,15 +29,43 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   (`n_subjects x max_length`, 4.2 GB for the class above) and the BLAST stream
   itself is discarded as it is read. Round-3 outputs are now
   `*_upstream3.cp.tsv` / `*_downstream3.cp.tsv`.
+
 - Ask `blastn` for only the six columns the predicates need (it was formatting
   twelve and `awk` discarded nine) and push the identity cut-off down into
   `-perc_identity`. `filter_blast3`'s evalue predicate was already unreachable
   behind `-evalue 1e-10` and is no longer evaluated.
+
 - Results are unchanged: `tests/test_round3_cp.R` (replacing
   `tests/test_blast_reduce.R`) asserts the new path reproduces the R
   implementation's switch points exactly, across predicate edge cases, random
   coverage profiles for both switch-point methods, and a real self-BLAST.
-- New runtime dependency: `numpy`.
+
+### Round 3 uses the machine properly
+
+- Round 3 runs the two directions concurrently. A single `blastn` saturates at
+  roughly a quarter of the threads it is given (24.7 of 96 on run-000129, 6.1 of
+  14 locally) and `-mt_mode 1` does not change that -- measured identical wall
+  time for 7x the memory -- so the way to use a large machine is more searches,
+  not more threads per search. Measured locally: two 7-thread searches sustain
+  1.81 queries/s against 1.28 for one 14-thread search, 1.42x on the same
+  cores. The upstream and downstream searches now run side by side with the
+  threads split between them. Output is unaffected (`tests.sh short` is
+  byte-identical) because the searches write separate files and the coverage
+  profiles are order-independent integer accumulations.
+
+- Each Round-3 search is split into concurrent query chunks whose coverage
+  profiles are summed. `blast_cp.py` gained `--dump-profile` and `--merge`; the
+  profile is a difference array, so summing chunk profiles is exactly the
+  arithmetic of one search over all the queries, and profile files carry a
+  header pinning the subject set so profiles from different databases cannot be
+  added together. Measured on the CACTA database, four 3-thread searches
+  processed the same queries **3.0x faster than one 14-thread search, on fewer
+  threads**. `blast_chunk_count()` sizes the split so no search is asked to
+  scale past the point where it stops paying (12 threads), capped at 8 chunks
+  because each costs one coverage profile in RAM and on disk.
+
+### Optional query sampling, off by default
+
 - New `--max_round3_queries N` (default 0 = off, i.e. the exact path). Above
   that many copies, a class runs its Round-3 self-BLAST on a random N-query
   sample with the coverage scaled back up, and every subject whose sampled
@@ -42,16 +82,7 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   exact path (the default) remains the recommendation for a production library.
   Numbers, calibration and the limits of the support gate are in
   `docs/round3_scaling.md` 11-12.
-- Round 3 runs the two directions concurrently. A single `blastn` saturates at
-  roughly a quarter of the threads it is given (24.7 of 96 on run-000129, 6.1 of
-  14 locally) and `-mt_mode 1` does not change that -- measured identical wall
-  time for 7x the memory -- so the way to use a large machine is more searches,
-  not more threads per search. Measured locally: two 7-thread searches sustain
-  1.81 queries/s against 1.28 for one 14-thread search, 1.42x on the same
-  cores. The upstream and downstream searches now run side by side with the
-  threads split between them. Output is unaffected (`tests.sh short` is
-  byte-identical) because the searches write separate files and the coverage
-  profiles are order-independent integer accumulations.
+
 - Sampled runs are deterministic: the draw is a function of `--seed` and the
   input alone. The generator is pinned explicitly rather than inherited, which
   closes a real hole -- under `RNGkind("L'Ecuyer-CMRG")`, which `parallel` code
@@ -61,32 +92,9 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   sampled query FASTA). Thread count does not affect results either: the
   coverage profile is an order-independent integer accumulation, verified
   byte-identical at `-num_threads 1` vs `8` on real data.
-- Stop loading the whole genome into R. `detect_tirs.R` and
-  `cluster_tir_sequences` both did `readDNAStringSet(genome)` to pull out a few
-  thousand short TIR ranges; a `DNAStringSet` costs ~1 byte per base, so for
-  run-000129's 94.3 Gbp assembly that is ~94 GB of RAM, twice. Neither call had
-  ever been reached on that genome because Round 3 failed first. Both now use
-  `Rsamtools::FaFile` random access through the `.fai`, which reads only the
-  requested ranges (`genome_fa_handle`, which indexes the genome if needed and
-  fails loudly if it cannot). Output is unchanged: `tests/test_genome_access.R`
-  asserts the two paths return identical sequences including
-  reverse-complementing of minus-strand ranges, and `tests.sh short` produces a
-  byte-identical `DANTE_TIR_final.fasta`. `bioconductor-rsamtools` is now a
-  declared dependency (it arrived via BSgenome before). **The genome must be
-  indexable**: the `.fai` is created on first use, so this matters only when
-  the directory holding the genome is not writable, in which case the run stops
-  with an error naming the file and the `samtools faidx` command that fixes it.
-  0.2.8 would have loaded such a genome whole. See the README.
-- Pin the record order of the amino-acid FASTA that mmseqs2 clusters, since
-  `--max_class_size` splits classes along those clusters. Measured on
-  run-000129's MuDR domains with the pipeline's own parameters, mmseqs2 is
-  stable for a fixed input -- rerunning is identical and 1 thread matches 4 --
-  but *order-sensitive*: shuffling the input alone moved 258 of 5,983 clusters
-  and changed the cluster count to 6,016. The order the pipeline produces is
-  the GFF3's, carried through dicts and lists, and no `set` sits in that chain;
-  `tests/test_aa_fasta_order.py` builds the FASTA in separate interpreters
-  under different `PYTHONHASHSEED` values and asserts the bytes match, so a
-  future `set` cannot silently make split runs irreproducible.
+
+### Round 1: CAP3 is bounded, and its failures are visible
+
 - `--max_class_size` is on by default (10,000 sequences), now that seeding
   fragmentation per sequence makes splitting a genuine no-op below the
   threshold -- verified byte-identical on `tests/data/short`, whose classes sit
@@ -97,12 +105,29 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   together -- at 4,000 copies that yields half as many contigs holding twice as
   many fragments each, and 66% of the input assembled against 53% for a random
   split. `--max_class_size 0` restores the old unsplit behaviour.
+
 - New `--cap3_max_memory` bounds concurrent CAP3 assemblies by memory rather
   than core count. CAP3 needs ~`0.067 * Mbp^1.22` GB (a fit reproducing four
   measured points within 1%), so a class split into 21 parts of ~12.5 GB would
   have asked for ~1.2 TB when every core started one. The pool is now sized to
   fit a budget defaulting to 60% of detected memory (cgroup-aware), and the
   decision is logged.
+
+- CAP3 failures are no longer silent. `cap3assembly` ignored CAP3's exit
+  status, so a crash produced a zero-byte `.cap.aln` that the pipeline accepted
+  as a finished assembly -- and that the `os.path.exists` guard then reused on
+  every re-run. On run-000129 this cost the 168,012-copy EnSpm/CACTA class its
+  entire Round 1 without a word in the log. CAP3's limit is now measured: it
+  segfaults once one input exceeds ~1.07 Gbp (between 1.060 and 1.073 Gbp,
+  driven by total bases rather than read count or content), which for 6300 bp
+  flanking regions is ~118,000 sequences per part. `cap3assembly` refuses such
+  inputs up front, checks the exit status, leaves no bogus `.cap.aln`, and
+  `dante_tir.py` reports which classes lost their assembly.
+  `--max_class_size` remains off by default: enabling it perturbs the random
+  fragmentation and so changes results even when it splits nothing, and on
+  small inputs that shift is within the pipeline's own seed sensitivity
+  (`tests/data/short` gives 14/10/10 records for seeds 42/1/7).
+
 - Fragmentation is seeded per sequence. `dict_fasta_to_dict_fragments` drew its
   jitter from one global RNG, so a region's fragments depended on how many draws
   had happened before it -- that is, on how many other sequences were processed
@@ -119,20 +144,9 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   `tests/test_fragmentation.py` asserts order-, subset- and hash-seed
   invariance plus seed sensitivity, salt separation and the unchanged
   fragmentation scheme.
-- CAP3 failures are no longer silent. `cap3assembly` ignored CAP3's exit
-  status, so a crash produced a zero-byte `.cap.aln` that the pipeline accepted
-  as a finished assembly -- and that the `os.path.exists` guard then reused on
-  every re-run. On run-000129 this cost the 168,012-copy EnSpm/CACTA class its
-  entire Round 1 without a word in the log. CAP3's limit is now measured: it
-  segfaults once one input exceeds ~1.07 Gbp (between 1.060 and 1.073 Gbp,
-  driven by total bases rather than read count or content), which for 6300 bp
-  flanking regions is ~118,000 sequences per part. `cap3assembly` refuses such
-  inputs up front, checks the exit status, leaves no bogus `.cap.aln`, and
-  `dante_tir.py` reports which classes lost their assembly.
-  `--max_class_size` remains off by default: enabling it perturbs the random
-  fragmentation and so changes results even when it splits nothing, and on
-  small inputs that shift is within the pipeline's own seed sensitivity
-  (`tests/data/short` gives 14/10/10 records for seeds 42/1/7).
+
+### Correctness fixes
+
 - Fix `find_switch_point_from_blast_coverage3` (the EnSpm/CACTA method), which
   read its quality thresholds at `cp - W` -- 200 bp away from the switch point
   it had just found. `m1`/`m2` there are indexed by position, so the test
@@ -158,6 +172,42 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   while waiting) and reports its stderr when clustering fails; `makeblastdb`
   discards its output via `DEVNULL`. Added `tests/test_subprocess_pipes.py`
   (in `tests/unit.sh`) to keep the pattern from coming back.
+
+### Memory
+
+- Stop loading the whole genome into R. `detect_tirs.R` and
+  `cluster_tir_sequences` both did `readDNAStringSet(genome)` to pull out a few
+  thousand short TIR ranges; a `DNAStringSet` costs ~1 byte per base, so for
+  run-000129's 94.3 Gbp assembly that is ~94 GB of RAM, twice. Neither call had
+  ever been reached on that genome because Round 3 failed first. Both now use
+  `Rsamtools::FaFile` random access through the `.fai`, which reads only the
+  requested ranges (`genome_fa_handle`, which indexes the genome if needed and
+  fails loudly if it cannot). Output is unchanged: `tests/test_genome_access.R`
+  asserts the two paths return identical sequences including
+  reverse-complementing of minus-strand ranges, and `tests.sh short` produces a
+  byte-identical `DANTE_TIR_final.fasta`. `bioconductor-rsamtools` is now a
+  declared dependency (it arrived via BSgenome before). **The genome must be
+  indexable**: the `.fai` is created on first use, so this matters only when
+  the directory holding the genome is not writable, in which case the run stops
+  with an error naming the file and the `samtools faidx` command that fixes it.
+  0.2.8 would have loaded such a genome whole. See the README.
+
+### Reproducibility
+
+- Pin the record order of the amino-acid FASTA that mmseqs2 clusters, since
+  `--max_class_size` splits classes along those clusters. Measured on
+  run-000129's MuDR domains with the pipeline's own parameters, mmseqs2 is
+  stable for a fixed input -- rerunning is identical and 1 thread matches 4 --
+  but *order-sensitive*: shuffling the input alone moved 258 of 5,983 clusters
+  and changed the cluster count to 6,016. The order the pipeline produces is
+  the GFF3's, carried through dicts and lists, and no `set` sits in that chain;
+  `tests/test_aa_fasta_order.py` builds the FASTA in separate interpreters
+  under different `PYTHONHASHSEED` values and asserts the bytes match, so a
+  future `set` cannot silently make split runs irreproducible.
+
+### Dependencies
+
+- New runtime dependency: `numpy`.
 
 ## 0.2.8 — 2026-07-21
 
