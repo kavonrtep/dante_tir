@@ -399,7 +399,20 @@ def main():
 
     if result.returncode != 0:
         print(f"ERROR: TIR detection failed with return code {result.returncode}")
-        print(f"Check logs in {log_dir} for details")
+        # Show the R error here rather than only in the log file. Without this
+        # a CI failure reports nothing but the exit status, and the log lives on
+        # a runner that is gone by the time anyone looks.
+        for label, path in (("stderr", stderr_log), ("stdout", stdout_log)):
+            try:
+                with open(path) as f:
+                    tail = f.read().splitlines()[-25:]
+            except OSError:
+                continue
+            if tail:
+                print(f"--- last {len(tail)} lines of {label} ---")
+                for line in tail:
+                    print("  " + line)
+        print(f"Full logs in {log_dir}")
         raise subprocess.CalledProcessError(result.returncode, cmd)
 
     # copy output files to output directory
