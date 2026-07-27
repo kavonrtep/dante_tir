@@ -73,6 +73,16 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   reverse-complementing of minus-strand ranges, and `tests.sh short` produces a
   byte-identical `DANTE_TIR_final.fasta`. `bioconductor-rsamtools` is now a
   declared dependency (it arrived via BSgenome before).
+- Pin the record order of the amino-acid FASTA that mmseqs2 clusters, since
+  `--max_class_size` splits classes along those clusters. Measured on
+  run-000129's MuDR domains with the pipeline's own parameters, mmseqs2 is
+  stable for a fixed input -- rerunning is identical and 1 thread matches 4 --
+  but *order-sensitive*: shuffling the input alone moved 258 of 5,983 clusters
+  and changed the cluster count to 6,016. The order the pipeline produces is
+  the GFF3's, carried through dicts and lists, and no `set` sits in that chain;
+  `tests/test_aa_fasta_order.py` builds the FASTA in separate interpreters
+  under different `PYTHONHASHSEED` values and asserts the bytes match, so a
+  future `set` cannot silently make split runs irreproducible.
 - CAP3 failures are no longer silent. `cap3assembly` ignored CAP3's exit
   status, so a crash produced a zero-byte `.cap.aln` that the pipeline accepted
   as a finished assembly -- and that the `os.path.exists` guard then reused on

@@ -14,4 +14,8 @@ echo
 echo "=== unit: CAP3 failures are reported, not silently swallowed ==="
 python3 "$ROOT/tests/test_cap3_guard.py"
 
+echo
+echo "=== unit: the aa FASTA order mmseqs2 depends on is stable ==="
+python3 "$ROOT/tests/test_aa_fasta_order.py"
+
 echo "unit tests OK"
