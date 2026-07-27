@@ -83,6 +83,22 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   `tests/test_aa_fasta_order.py` builds the FASTA in separate interpreters
   under different `PYTHONHASHSEED` values and asserts the bytes match, so a
   future `set` cannot silently make split runs irreproducible.
+- Fragmentation is seeded per sequence. `dict_fasta_to_dict_fragments` drew its
+  jitter from one global RNG, so a region's fragments depended on how many draws
+  had happened before it -- that is, on how many other sequences were processed
+  first. Regrouping the input therefore changed the fragments even when it split
+  nothing: `--max_class_size 10000` on `tests/data/short` moved the result from
+  14 records to 9 with one part per class, which is why the flag could not be
+  enabled by default. Each sequence now gets its own generator seeded from
+  (`--seed`, direction, sequence id) via blake2b -- not `hash()`, which Python
+  randomises per process. `--max_class_size` above every class size is now
+  byte-identical to omitting it. **Round-1 results shift once** as a
+  consequence (`tests/data/short`: 15 records to 11), within the band the seed
+  alone already spans on that dataset (14/10/10 for seeds 42/1/7).
+  `--seed` now also controls the Python stage, which it did not before.
+  `tests/test_fragmentation.py` asserts order-, subset- and hash-seed
+  invariance plus seed sensitivity, salt separation and the unchanged
+  fragmentation scheme.
 - CAP3 failures are no longer silent. `cap3assembly` ignored CAP3's exit
   status, so a crash produced a zero-byte `.cap.aln` that the pipeline accepted
   as a finished assembly -- and that the `os.path.exists` guard then reused on

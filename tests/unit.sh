@@ -18,4 +18,8 @@ echo
 echo "=== unit: the aa FASTA order mmseqs2 depends on is stable ==="
 python3 "$ROOT/tests/test_aa_fasta_order.py"
 
+echo
+echo "=== unit: fragmentation depends on the sequence, not on its neighbours ==="
+python3 "$ROOT/tests/test_fragmentation.py"
+
 echo "unit tests OK"

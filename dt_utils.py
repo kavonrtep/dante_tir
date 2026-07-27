@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import hashlib
 import math
 import random
 import subprocess
@@ -266,26 +267,52 @@ def reverse_complement(dna: str) -> str:
 
     return ''.join(complement[base] for base in reversed(dna.upper()))
 
+def _fragment_seed(seed: int, salt: str, seq_id: str) -> int:
+    """Stable RNG seed for one sequence's fragmentation.
+
+    blake2b rather than hash(): Python randomises string hashing per process,
+    so hash() would make fragments differ between runs of the same code -- the
+    failure mode tests/test_aa_fasta_order.py exists to prevent elsewhere.
+    """
+    key = F'{seed}\t{salt}\t{seq_id}'.encode('utf-8')
+    return int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), 'big')
+
+
 # note : original settings step=70, length=100, jitter=10
 def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
-                                 step=70, length=100, jitter=10) -> Dict[str, str]:
+                                 step=70, length=100, jitter=10,
+                                 seed=42, salt='') -> Dict[str, str]:
 
     """
 
     fragment fasta sequences to overlapping parts
+
+    Each sequence is jittered from its own generator, seeded from
+    (seed, salt, seq_id), so its fragments depend on nothing but the sequence
+    itself. Until 0.3.0 the jitter came from one global RNG, which made a
+    region's fragments depend on how many draws had happened before it -- so
+    regrouping the input changed the fragments even when it split nothing, and
+    --max_class_size could never be a no-op. See
+    docs/fragmentation_determinism_plan.md.
+
     :param fasta_dict: dictionary with fasta sequences
     :param step: step size
     :param length: length of fragment
     :param jitter: random jitter size - make step size random withing jitter limits
+    :param seed: pipeline random seed (dante_tir.py --seed)
+    :param salt: distinguishes runs over the same ids, e.g. upstream vs
+                 downstream, so one element's two regions are jittered
+                 independently
     :return: dictionary with fragments
     """
     fragments_dict = {}
     for seq_id, seq in fasta_dict.items():
+        rng = random.Random(_fragment_seed(seed, salt, seq_id))
         seq_len = len(seq)
 
         for i in range(0, seq_len, step):
             if i > 0:
-                ii = i + random.randint(-jitter, jitter)
+                ii = i + rng.randint(-jitter, jitter)
             else:
                 ii = i
 
@@ -301,13 +328,16 @@ def dict_fasta_to_dict_fragments(fasta_dict: Dict[str, str],
 
 def make_fragment_files(output_dir: str,
                         downstream_seq: Dict[str, Dict[ int, str]],
-                        upstream_seq: Dict[str, Dict[ int, str]]
+                        upstream_seq: Dict[str, Dict[ int, str]],
+                        seed: int = 42
                         ) -> Tuple[Dict[str, str], Dict[str, str]]:
     """
     make fragment files for downstream and upstream sequences
     :param output_dir:
     :param downstream_seq:
     :param upstream_seq:
+    :param seed: pipeline random seed, passed through to the per-sequence
+                 fragmentation jitter
     :return: dictionaries with fragment file names
     """
     frg_names_upstream = {}
@@ -321,10 +351,12 @@ def make_fragment_files(output_dir: str,
         frg_names_upstream[cls] = prefix + '_upstream.fasta'
         frg_names_downstream[cls] = prefix + '_downstream.fasta'
 
-        fragments = dict_fasta_to_dict_fragments(upstream_seq[cls])
+        fragments = dict_fasta_to_dict_fragments(upstream_seq[cls], seed=seed,
+                                                 salt='upstream')
         save_fasta_dict_to_file(fragments, frg_names_upstream[cls])
 
-        fragments = dict_fasta_to_dict_fragments(downstream_seq[cls])
+        fragments = dict_fasta_to_dict_fragments(downstream_seq[cls], seed=seed,
+                                                 salt='downstream')
         save_fasta_dict_to_file(fragments, frg_names_downstream[cls])
     return frg_names_downstream, frg_names_upstream
 

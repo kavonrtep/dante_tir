@@ -214,8 +214,10 @@ def main():
 
         for part_num in split_mapping[cls]:
             # Fragment this part
-            up_frags = dt.dict_fasta_to_dict_fragments(split_upstream[cls][part_num])
-            down_frags = dt.dict_fasta_to_dict_fragments(split_downstream[cls][part_num])
+            up_frags = dt.dict_fasta_to_dict_fragments(
+                split_upstream[cls][part_num], seed=args.seed, salt='upstream')
+            down_frags = dt.dict_fasta_to_dict_fragments(
+                split_downstream[cls][part_num], seed=args.seed, salt='downstream')
 
             # Save fragmented parts
             class_name = cls.replace('/', '_').replace('|', '_')

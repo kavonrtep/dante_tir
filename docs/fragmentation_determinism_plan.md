@@ -3,9 +3,8 @@
 Implementation plan for making a region's fragments depend only on that region,
 so that `--max_class_size` stops changing results when it splits nothing.
 
-Status: **proposed, not implemented.** Deliberately held until the run-000129
-exact run finishes, since it changes the Python stages and would invalidate a
-comparison mid-flight.
+Status: **implemented in 0.3.0.** All six invariants hold and the acceptance
+criterion is met — see §9 for what it measured.
 
 ---
 
@@ -158,3 +157,32 @@ before fragmentation.
   jitter exists so that fragment boundaries do not align across copies, which
   is what lets CAP3 find staggered overlaps. Removing it is a scientific
   change, not a plumbing one, and would need its own evaluation.
+
+
+## 9. Outcome
+
+Implemented as designed: `_fragment_seed()` (blake2b over
+`seed \t salt \t seq_id`) plus a per-sequence `random.Random` in
+`dict_fasta_to_dict_fragments()`, with `salt='upstream'` / `'downstream'` at
+the two call sites and `seed` threaded from `--seed`. Both the split and
+unsplit paths run through the same loop in `dante_tir.py`, so both are covered.
+
+**Acceptance criterion met.** On `tests/data/short`, `--max_class_size 10000`
+(above every class, so it splits nothing) now produces `DANTE_TIR_final.gff3`,
+`DANTE_TIR_final.fasta` and `TIR_classification_summary.txt` **byte-identical**
+to a run without the flag. Before the change the same comparison was 14 records
+against 9.
+
+**One-time result shift, as predicted.** `tests/data/short` moves from 15
+records to 11. That is the fragments changing once because they are no longer a
+function of processing order, and it sits inside the pipeline's own
+seed-sensitivity band on this dataset (14 / 10 / 10 records for seeds 42 / 1 / 7
+before the change). Repeat runs at a fixed seed are byte-identical.
+
+All six invariants are asserted by `tests/test_fragmentation.py`, wired into
+`tests/unit.sh`; it needs no data and runs instantly.
+
+Not done here, deliberately: turning `--max_class_size` on by default. That is
+now *safe* to consider, but it is a separate decision with its own evidence
+(§8.2.1 of docs/round3_scaling.md), and it would want the CAP3 concurrency
+memory budget alongside it.
