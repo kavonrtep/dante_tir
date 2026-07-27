@@ -387,11 +387,12 @@ Real CACTA fragments from run-000129, one CAP3 per part, pipeline options
 | clustered | 1,000 | 89,843 | 571 s | 0.98 GB | 4,235 | 63.8 % |
 | clustered | 2,000 | 179,524 | 1,497 s | 2.25 GB | 8,232 | 64.7 % |
 | clustered | 4,000 | 359,524 | 3,853 s | 5.30 GB | 14,862 | 66.0 % |
+| clustered | 8,000 | 719,217 | 10,359 s | 12.45 GB | 24,149 | 67.4 % |
 | positional | 4,000 | 352,167 | 1,136 s | 1.89 GB | 23,797 | 59.3 % |
 | random | 4,000 | 359,784 | 1,146 s | 1.86 GB | 21,043 | 53.3 % |
 
-**Cost grows as ~n^1.38, not n².** Doubling a part multiplies wall time by 2.6
-and memory by 2.3. Projected: 8,000 copies ≈ 2.8 h / 12 GB, 16,000 ≈ 7 h /
+**Cost grows as ~n^1.4, not n².** Doubling a part multiplies wall time by 2.62,
+2.57 and 2.69 across the three doublings measured, and memory by ~2.3. Projected: 8,000 copies ≈ 2.8 h / 12 GB, 16,000 ≈ 7 h /
 29 GB, and the 118,000-copy crash limit ≈ 4.6 days / ~300 GB — so **runtime,
 not the 32-bit overflow, is what really caps part size**, but not as brutally
 as a quadratic would.
@@ -797,3 +798,58 @@ Sampling is a screening tool, not the default:
 - **A larger sample does not buy away the churn** — it buys accurate positions.
   If churn is what matters, exact is the answer, not `--max_round3_queries
   40000`.
+
+
+## 13. The exact run (run-000129, 2026-07-27)
+
+Rounds 1–4 re-run with `--max_round3_queries 0` — no sampling — on the code
+including the §8.1 fix, with direction-level and chunk-level concurrency.
+
+**It completed in 10 h 02 m** (05:36 → 15:38) against ~28 h for the unchunked
+path, producing 7,051 elements: 6,653 EnSpm/CACTA, 293 hAT, 98 MuDR/Mutator,
+7 PIF/Harbinger. Rounds contributed 81 / 8 / 5,140 / 1,822.
+
+Round 3 ran 05:49 → 15:34. CACTA upstream took 4 h 16 m and downstream 9 h 29 m
+— a 2.2× ratio, matching the 2.1× seen in the sampled run, and confirming that
+downstream carries disproportionately more work on this genome. The log shows
+the intended layout: `2 directions x 4 query chunks, 12 threads each
+(8 searches)`, followed by `merged 4 profiles`.
+
+### The switch points reproduce exactly
+
+The CACTA upstream cp table from this run is **identical, line for line, to the
+table computed independently** from the *original* run's 41.5 GB Round-3 output
+(`blast_cp.py` over that file, same method): all 167,284 subjects, all 75,135
+switch points, same `cp` on every row.
+
+Those two numbers come from different BLAST runs — different day, different
+invocation (six columns plus `-perc_identity` versus the old twelve-column awk
+path), chunked-and-merged versus a single stream, different machine. 433 of the
+167,284 `support` values differ in the third decimal (e.g. 7272.184 vs
+7272.237), which is the two BLAST runs reporting marginally different hit sets;
+not one of them moved a switch point.
+
+That is the end-to-end check for everything in §10–§11 at once: the new BLAST
+invocation, the chunk merge, the streaming parser and the fixed `cumsum`
+method.
+
+### Exact versus sampled
+
+| class | exact | sampled (§12) |
+|---|---|---|
+| EnSpm/CACTA | 6,653 | 7,442 |
+| hAT | 293 | 293 |
+| MuDR/Mutator | 98 | 89 |
+| PIF/Harbinger | 7 | 7 |
+| **total** | **7,051** | 7,831 |
+
+The comparison is **confounded** and should not be read as "sampling found 789
+more CACTA elements": the sampled run predates the §8.1 fix, which by itself
+removed 18.5 % of upstream switch points. hAT and PIF are identical across the
+two runs — both were below the sampling cap and therefore exact in both, so
+they also demonstrate reproducibility across two independent runs.
+
+Round 1 contributed 81 of 7,051 elements, unchanged, because this rerun reuses
+the original CAP3 output — which is empty for CACTA (§8.2). Closing that gap
+needs a full `dante_tir.py` run, which is what the `--max_class_size` default
+introduced in 0.3.0 makes safe.
