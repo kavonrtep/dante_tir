@@ -20,24 +20,67 @@ PATH — prepend the conda env when you need them:
    - It checks the `petrnovak/dante_tir` conda channel and local git tags.
    - If it fails, STOP and report — do not proceed. Pick a higher version.
 
-3. **Bump** `version.py` to `<X.Y.Z>`.
+3. **Run the release gate locally — `./tests.sh long`.** This is the step that
+   `conda-release.yml` runs before it builds anything, and `smoke`/`short` do
+   NOT cover it: `long` is the only test that exercises Round 4, the mmseqs
+   clustering of TIR sequences and the final genome extraction. 0.3.0 burned
+   three tag cycles because this was skipped. It takes ~90 s:
+   `NCPU=2 ./tests.sh long`
+   Also run `unit`, `smoke` and `short`. If any fail, STOP.
 
-4. **Changelog.** Add a `## <X.Y.Z> — <today's date>` section at the top of
+4. **Bump** `version.py` to `<X.Y.Z>`.
+
+5. **Changelog.** Add a `## <X.Y.Z> — <today's date>` section at the top of
    `changelog.md`, summarizing the commits since the last release tag
    (`git log <last-tag>..HEAD`). Match the prose style of existing entries.
 
-5. **Commit** exactly as `release <X.Y.Z>` (subject line), with a short body and
+6. **Commit** exactly as `release <X.Y.Z>` (subject line), with a short body and
    the trailer:
-   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
+   `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
    If `git commit` complains about identity, set it for this repo:
    `git config user.name "Petr Novak" && git config user.email "petr@umbr.cas.cz"`.
 
-6. **Tag** `git tag <X.Y.Z>`.
+7. **Tag** `git tag <X.Y.Z>`.
 
-7. **STOP. Do NOT push.** The user pushes themselves — the tag-driven
+8. **STOP. Do NOT push.** The user pushes themselves — the tag-driven
    `conda-release.yml` CI publishes on tag push, and they control timing. Report
    the state and give the exact push command, e.g.
    `git push origin main && git push origin <X.Y.Z>`.
    (Only mention `--force`/`--force-with-lease` if the branch/tag was rewritten.)
 
 Related: see the `release-workflow` and `env-tools` memories.
+
+## If the release gate fails after the tag is pushed
+
+A failed gate publishes **nothing** — `conda-release.yml` runs the gate before
+`conda-build`, so there is no artifact and no anaconda upload. Confirm with
+`RELEASE_VERSION=<X.Y.Z> ./dev_scripts/check_release_version.sh`; if it still
+reports the version as free, the tag may be moved rather than burning a version:
+
+```bash
+git commit ...                       # the fix
+git tag -f <X.Y.Z> HEAD
+# then the user pushes:
+git push origin main
+git push --delete origin <X.Y.Z>
+git push origin <X.Y.Z>
+```
+
+Point the tag at the *fix* commit, not the `release <X.Y.Z>` commit — the
+workflow only asserts that `version.py` matches the tag name, which still holds.
+
+## Hard-won notes
+
+- **CI environment ≠ a fresh conda env.** The 0.3.0 gate failed with
+  `there is no package called 'GenomeInfoDbData'` while the same
+  `requirements.txt` resolved perfectly in a locally created env. Installing the
+  runtime stack *into* an env that already held `conda-build` produced a broken
+  Bioconductor installation. The gate now builds its own env; do not move the
+  runtime deps back into the build env.
+- **Do not debug CI blind.** `dante_tir.py` prints R's stderr on failure and
+  both workflows load the R stack right after install. If a failure ever again
+  reports only an exit status, fix the visibility first — two cycles were spent
+  guessing before that was added.
+- **The GitHub release is automatic** (`Create the GitHub release` step, notes
+  taken from the changelog section for the tag). It needs `permissions:
+  contents: write` on the job. Before 0.3.1 this was manual.

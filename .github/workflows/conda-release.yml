@@ -8,6 +8,8 @@ jobs:
   build-and-upload:
     name: build + upload to anaconda.org
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # needed to create the GitHub release
     defaults:
       run:
         shell: bash -el {0}
@@ -117,6 +119,32 @@ jobs:
             anaconda -t "$ANACONDA_API_TOKEN" upload \
               --user petrnovak --label main "$f"
           done
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Release notes are this version's changelog section, so the GitHub
+          # release says the same thing as the repository rather than being
+          # written twice.
+          python - <<'PY' > release_notes.md
+          import os, re
+          version = os.environ["GITHUB_REF_NAME"]
+          text = open("changelog.md").read()
+          m = re.search(r"^## %s\b.*?(?=^## )" % re.escape(version),
+                        text, re.S | re.M)
+          print(m.group(0).strip() if m else
+                "See changelog.md for the changes in %s." % version)
+          PY
+          echo "--- release notes ---"; head -20 release_notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release_notes.md \
+            build_out/noarch/dante_tir-*.conda \
+            build_out/noarch/dante_tir-*.tar.bz2 || \
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release_notes.md
 
       - name: Upload build artefact (for debugging)
         if: always()
