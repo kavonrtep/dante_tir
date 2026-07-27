@@ -377,6 +377,56 @@ being an MCMC. On a 31-copy class the pipeline's own seed sensitivity is
 ±30 %, so the flag stays opt-in rather than silently perturbing every existing
 run.
 
+### 8.2.1 What CAP3 actually costs, and how to split (measured)
+
+Real CACTA fragments from run-000129, one CAP3 per part, pipeline options
+(`-o 40 -p 80 -x cap -w`), single core:
+
+| part | copies | fragments | wall | peak RSS | contigs | fragments assembled |
+|---|---|---|---|---|---|---|
+| clustered | 1,000 | 89,843 | 571 s | 0.98 GB | 4,235 | 63.8 % |
+| clustered | 2,000 | 179,524 | 1,497 s | 2.25 GB | 8,232 | 64.7 % |
+| clustered | 4,000 | 359,524 | 3,853 s | 5.30 GB | 14,862 | 66.0 % |
+| positional | 4,000 | 352,167 | 1,136 s | 1.89 GB | 23,797 | 59.3 % |
+| random | 4,000 | 359,784 | 1,146 s | 1.86 GB | 21,043 | 53.3 % |
+
+**Cost grows as ~n^1.38, not n².** Doubling a part multiplies wall time by 2.6
+and memory by 2.3. Projected: 8,000 copies ≈ 2.8 h / 12 GB, 16,000 ≈ 7 h /
+29 GB, and the 118,000-copy crash limit ≈ 4.6 days / ~300 GB — so **runtime,
+not the 32-bit overflow, is what really caps part size**, but not as brutally
+as a quadratic would.
+
+**Cluster-coherent parts are worth their cost.** At the same 4,000 copies,
+grouping by mmseqs cluster costs 3.4× the wall time and 2.8× the memory of a
+positional or random split — and that is the assembly actually happening:
+it yields *half* as many contigs (14,862 vs 23,797) holding *twice* as many
+fragments each (16.0 vs 8.8), and assembles 66 % of the input against 53 % for
+a random split. Round 1 reads element boundaries off contig coverage, so deeper
+contigs from genuinely related copies are exactly the signal it needs. A random
+split of the same size does the cheap thing and learns the least.
+
+That is what `--max_class_size` already does — `group_sequences_by_clusters()`
+keeps mmseqs clusters together and only splits a cluster that exceeds the
+threshold on its own. The cluster structure of this class makes that
+worthwhile: 168,012 domains in 85,606 clusters, with the largest at 14,825,
+12,471 and 10,565 members and 17 clusters ≥ 1,000 covering 42 % of all copies —
+but also 82,745 singleton clusters covering 49 % of copies, which will be
+merged into mixed groups where little will assemble.
+
+**Sizing guidance.** A part of 8,000–16,000 copies keeps each CAP3 to ~3–7 h
+and 12–29 GB while leaving the three largest clusters nearly intact. For CACTA
+that is 11–21 parts per direction.
+
+**But watch concurrency memory.** `dante_tir.py` runs CAP3 through
+`Pool(processes=args.cpu)` over every (class, part, direction) FASTA, so on a
+96-core node it would start dozens of these at once: 21 parts × 2 directions at
+12 GB each is ~500 GB resident. That fits 768 GB but not much else, and nothing
+currently bounds it. Splitting a class therefore needs a matching cap on how
+many CAP3 jobs run concurrently — a memory budget rather than a core count.
+
+**For run-000129** the practical setting is `--max_class_size` in the 8k–16k
+range with bounded CAP3 concurrency, not the ~118,000 the crash limit allows.
+
 **For run-000129**: `--max_class_size 100000` splits CACTA into two parts of
 ~0.76 Gbp, under the limit. Runtime is the open question — MuDR's 1.01 M
 fragments took ~1.9 h and CAP3 is superlinear, so a 7.6 M-fragment part may be
