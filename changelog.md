@@ -207,6 +207,13 @@ is found again at identical coordinates, plus one more.
 
 ### Dependencies
 
+- `bioconductor-genomeinfodbdata` is declared explicitly. It is a transitive
+  requirement of `GenomeInfoDb`, which every Bioconductor package here loads,
+  and a fresh solve pulls it in — but the release workflow installs into an env
+  that already holds `conda-build`, and that constrained solve left it out. The
+  R stage then died at startup with *there is no package called
+  'GenomeInfoDbData'*. Naming it removes the dependence on solver order.
+
 - New runtime dependency: `numpy`.
 
 ## 0.2.8 — 2026-07-21

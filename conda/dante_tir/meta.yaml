@@ -31,6 +31,7 @@ requirements:
     - r-optparse
     - r-rbeast
     - bioconductor-biostrings
+    - bioconductor-genomeinfodbdata
     - bioconductor-bsgenome
     - bioconductor-rsamtools
     - bioconductor-rtracklayer

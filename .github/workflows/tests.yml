@@ -36,6 +36,14 @@ jobs:
           mamba info
           mamba list
 
+      - name: Verify the R stack loads
+        run: |
+          Rscript -e 'suppressPackageStartupMessages({
+            library(Biostrings); library(BSgenome); library(Rsamtools)
+            library(rtracklayer); library(Rbeast); library(optparse)
+          }); cat("R dependencies load OK\n")'
+          python3 -c "import numpy; print('numpy', numpy.__version__)"
+
       - name: Smoke test
         run: ./tests.sh smoke
 
