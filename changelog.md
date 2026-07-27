@@ -72,7 +72,11 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   asserts the two paths return identical sequences including
   reverse-complementing of minus-strand ranges, and `tests.sh short` produces a
   byte-identical `DANTE_TIR_final.fasta`. `bioconductor-rsamtools` is now a
-  declared dependency (it arrived via BSgenome before).
+  declared dependency (it arrived via BSgenome before). **The genome must be
+  indexable**: the `.fai` is created on first use, so this matters only when
+  the directory holding the genome is not writable, in which case the run stops
+  with an error naming the file and the `samtools faidx` command that fixes it.
+  0.2.8 would have loaded such a genome whole. See the README.
 - Pin the record order of the amino-acid FASTA that mmseqs2 clusters, since
   `--max_class_size` splits classes along those clusters. Measured on
   run-000129's MuDR domains with the pipeline's own parameters, mmseqs2 is

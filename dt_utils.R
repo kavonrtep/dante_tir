@@ -1030,8 +1030,16 @@ genome_fa_handle <- function(genome_file) {
     message("Indexing ", basename(genome_file), " for random access...")
     tryCatch(Rsamtools::indexFa(genome_file),
              error = function(e)
-               stop("cannot index ", genome_file, ": ", conditionMessage(e),
-                    "\n  (a writable .fai next to the genome is required)"))
+               stop("cannot index the genome for random access.\n",
+                    "  genome: ", genome_file, "\n",
+                    "  reason: ", conditionMessage(e), "\n",
+                    "  DANTE_TIR reads TIR sequences through a FASTA index, so ",
+                    "the genome needs a .fai\n",
+                    "  beside it. Either make that directory writable, or index ",
+                    "the genome yourself:\n",
+                    "      samtools faidx ", genome_file, "\n",
+                    "  (or copy the genome somewhere writable and point ",
+                    "--fasta at the copy)."))
   }
   Rsamtools::FaFile(genome_file)
 }

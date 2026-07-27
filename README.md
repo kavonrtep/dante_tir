@@ -47,6 +47,24 @@ The recipe lives at `conda/dante_tir/`.
 dante_tir.py -g annotation.gff3 -f genome.fasta -o output_directory [-c number_of_CPUs]
 ```
 
+### Genome FASTA requirements:
+
+The genome must be indexable with a FASTA index (`.fai`). DANTE_TIR extracts
+TIR sequences through that index rather than loading the assembly into memory,
+which is what makes large genomes feasible — a 94 Gbp assembly would otherwise
+need ~94 GB of RAM for this step alone.
+
+The index is created automatically on first use, so normally there is nothing
+to do. It only needs attention when the directory holding the genome is **not
+writable**, in which case DANTE_TIR stops with an error naming the file. Fix it
+by indexing the genome yourself where you do have write access:
+
+```bash
+samtools faidx genome.fasta
+```
+
+or by copying the genome somewhere writable and pointing `-f` at the copy.
+
 ### Arguments:
 - `-g, --gff3`: GFF3 file with DANTE annotation of conserved domains of transposases (**required**).
 - `-f, --fasta`: FASTA file with genome assembly (**required**).
