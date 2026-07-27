@@ -83,6 +83,22 @@ Round-3 scaling: the self-BLAST table is never parsed in R at all.
   `tests/test_aa_fasta_order.py` builds the FASTA in separate interpreters
   under different `PYTHONHASHSEED` values and asserts the bytes match, so a
   future `set` cannot silently make split runs irreproducible.
+- `--max_class_size` is on by default (10,000 sequences), now that seeding
+  fragmentation per sequence makes splitting a genuine no-op below the
+  threshold -- verified byte-identical on `tests/data/short`, whose classes sit
+  far below it. Splitting a large class is not only what keeps CAP3 inside the
+  ~1.07 Gbp it can index; it is also *faster*, because CAP3 costs ~n^1.4, so
+  two halves are cheaper than the whole (measured: 1,000 copies 571 s, 8,000
+  copies 10,359 s). Grouping follows mmseqs2 clusters, so related copies stay
+  together -- at 4,000 copies that yields half as many contigs holding twice as
+  many fragments each, and 66% of the input assembled against 53% for a random
+  split. `--max_class_size 0` restores the old unsplit behaviour.
+- New `--cap3_max_memory` bounds concurrent CAP3 assemblies by memory rather
+  than core count. CAP3 needs ~`0.067 * Mbp^1.22` GB (a fit reproducing four
+  measured points within 1%), so a class split into 21 parts of ~12.5 GB would
+  have asked for ~1.2 TB when every core started one. The pool is now sized to
+  fit a budget defaulting to 60% of detected memory (cgroup-aware), and the
+  decision is logged.
 - Fragmentation is seeded per sequence. `dict_fasta_to_dict_fragments` drew its
   jitter from one global RNG, so a region's fragments depended on how many draws
   had happened before it -- that is, on how many other sequences were processed

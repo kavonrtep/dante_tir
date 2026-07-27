@@ -384,6 +384,76 @@ def fasta_total_bases(fasta_file) -> int:
     return total
 
 
+# Peak RSS of one CAP3 run, from measured points on real CACTA fragments
+# (docs/round3_scaling.md 8.2.1): 8.98 Mbp -> 0.98 GB, 17.9 -> 2.25, 35.9 ->
+# 5.30, 71.9 -> 12.45. A power fit gives RSS_GB ~= 0.067 * Mbp^1.22 to within a
+# few percent across that range.
+def cap3_expected_rss_gb(n_bases: int) -> float:
+    """Predicted peak RSS in GB for a CAP3 run over `n_bases` of input."""
+    if n_bases <= 0:
+        return 0.0
+    return 0.067 * (n_bases / 1e6) ** 1.22
+
+
+def system_memory_gb() -> float:
+    """Total memory visible to this process, honouring a cgroup limit if set."""
+    for path in ("/sys/fs/cgroup/memory.max",                 # cgroup v2
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):  # v1
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+            if raw not in ("max", ""):
+                limit = int(raw) / 1e9
+                # v1 reports a sentinel near 2^63 when unlimited
+                if 0 < limit < 1e6:
+                    return limit
+        except (OSError, ValueError):
+            pass
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / 1e6
+    except OSError:
+        pass
+    return 0.0
+
+
+def cap3_pool_size(fasta_files, cpu: int, memory_budget_gb: float = 0.0,
+                   memory_fraction: float = 0.6):
+    """How many CAP3 assemblies may run at once without exhausting memory.
+
+    CAP3 is single-threaded, so the pool was sized by CPU count alone. That is
+    fine until a class is split: 21 parts of a 168k-copy family are ~12.5 GB
+    each, and 96 of those would ask for far more memory than any machine has.
+
+    Returns (n_jobs, message).
+    """
+    sizes = []
+    for path in fasta_files:
+        try:
+            sizes.append(fasta_total_bases(path))
+        except OSError:
+            continue
+    if not sizes:
+        return max(1, int(cpu)), ""
+
+    worst_gb = cap3_expected_rss_gb(max(sizes))
+    budget = memory_budget_gb if memory_budget_gb > 0 else \
+        system_memory_gb() * memory_fraction
+    if budget <= 0 or worst_gb <= 0:
+        return max(1, int(cpu)), ""
+
+    n_jobs = max(1, min(int(cpu), int(budget // worst_gb)))
+    msg = (F"CAP3: {len(fasta_files)} assemblies, largest {max(sizes) / 1e6:.0f} Mbp "
+           F"(~{worst_gb:.1f} GB each); running {n_jobs} at a time "
+           F"within a {budget:.0f} GB budget")
+    if n_jobs == 1 and worst_gb > budget:
+        msg += (F"\n         WARNING: one assembly alone is predicted to exceed "
+                F"the budget; lower --max_class_size if it is killed")
+    return n_jobs, msg
+
+
 def cap3assembly(fasta_file, max_bases: int = CAP3_MAX_BASES):
     """
     run cap3 assembly

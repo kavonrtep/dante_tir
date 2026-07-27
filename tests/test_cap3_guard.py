@@ -119,6 +119,43 @@ def main():
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
+    # --- the memory budget that bounds CAP3 concurrency --------------------
+    wd2 = tempfile.mkdtemp()
+    try:
+        # Predictions must track the measured points (docs/round3_scaling.md
+        # 8.2.1): 8.98 Mbp -> 0.98 GB, 35.9 -> 5.30, 71.9 -> 12.45.
+        for mbp, measured in ((8.98, 0.98), (17.95, 2.25), (35.95, 5.30),
+                              (71.9, 12.45)):
+            pred = dt.cap3_expected_rss_gb(mbp * 1e6)
+            check(abs(pred - measured) / measured < 0.05,
+                  "RSS prediction at %.1f Mbp is %.2f GB, measured %.2f"
+                  % (mbp, pred, measured))
+
+        # A budget that fits three of these but not four.
+        files = []
+        for i in range(6):
+            p = os.path.join(wd2, "part%d.fasta" % i)
+            with open(p, "w") as f:                     # ~1 Mbp each
+                for j in range(100):
+                    f.write(">r%d\n%s\n" % (j, "ACGT" * 2500))
+            files.append(p)
+        one = dt.cap3_expected_rss_gb(dt.fasta_total_bases(files[0]))
+        n, msg = dt.cap3_pool_size(files, cpu=64, memory_budget_gb=one * 3.5)
+        check(n == 3, "a budget of 3.5x one assembly permits 3 at a time (got %d)" % n)
+        check("GB budget" in msg, "the decision is reported: %s" % msg.split("\n")[0])
+
+        n, _ = dt.cap3_pool_size(files, cpu=2, memory_budget_gb=one * 100)
+        check(n == 2, "a generous budget still respects --cpu (got %d)" % n)
+
+        n, msg = dt.cap3_pool_size(files, cpu=64, memory_budget_gb=one / 10)
+        check(n == 1, "an impossible budget still runs one at a time (got %d)" % n)
+        check("WARNING" in msg, "and warns that one assembly exceeds the budget")
+
+        check(dt.system_memory_gb() > 0.5,
+              "system memory is detectable (%.0f GB)" % dt.system_memory_gb())
+    finally:
+        shutil.rmtree(wd2, ignore_errors=True)
+
     if FAILS:
         print("test_cap3_guard: %d FAILURES" % FAILS)
         return 1

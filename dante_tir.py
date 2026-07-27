@@ -51,10 +51,19 @@ def main():
     parser.add_argument(
         '--max_class_size',
         help='Maximum number of sequences per class before splitting for CAP3 '
-             'assembly. Off by default. Needed for very high-copy superfamilies: '
-             'CAP3 segfaults once one input exceeds ~1.07 Gbp, which for 6300 bp '
-             'flanking regions is about 118,000 sequences per part',
-        type=int, default=None
+             'assembly, along mmseqs2 clusters so related copies stay together. '
+             'Classes below it are untouched. Splitting a large class is also '
+             'faster, not just safer: CAP3 costs ~n^1.4, so two halves are '
+             'cheaper than the whole. Use 0 to disable',
+        type=int, default=10000
+    )
+    parser.add_argument(
+        '--cap3_max_memory',
+        help='Memory budget in GB for concurrent CAP3 assemblies. CAP3 needs '
+             '~0.067 * Mbp^1.22 GB, so a split class can want far more than the '
+             'machine has if every core starts one. Default: 60%% of detected '
+             'memory',
+        type=float, default=0.0
     )
     parser.add_argument(
         '--version', action='version',
@@ -103,6 +112,11 @@ def main():
 
     if args.max_round3_queries < 0:
         parser.error("--max_round3_queries must be >= 0 (0 = no cap)")
+
+    if args.max_class_size is not None and args.max_class_size < 0:
+        parser.error("--max_class_size must be >= 0 (0 = no splitting)")
+    if args.cap3_max_memory < 0:
+        parser.error("--cap3_max_memory must be >= 0 (0 = auto)")
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     # set random seed for reproducibility
@@ -244,8 +258,16 @@ def main():
             frgs_class_mapping.append((cls, part_num, 'upstream'))
             frgs_class_mapping.append((cls, part_num, 'downstream'))
 
+    # CAP3 is single-threaded, so the pool used to be sized by CPU count alone.
+    # Once a class is split that is not enough: 21 parts of a 168k-copy family
+    # are ~12.5 GB each, and starting 96 of them would ask for ~1.2 TB.
+    n_cap3_jobs, mem_msg = dt.cap3_pool_size(frgs_fasta_both, args.cpu,
+                                             args.cap3_max_memory)
+    if mem_msg:
+        print()
+        print("  " + mem_msg)
     print("Assembling TIR boundaries...", end="")
-    with Pool(processes=args.cpu) as pool:
+    with Pool(processes=n_cap3_jobs) as pool:
         aln = pool.map(dt.cap3assembly, frgs_fasta_both, chunksize=1)
 
     print(" done")
