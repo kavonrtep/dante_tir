@@ -1327,7 +1327,13 @@ cluster_tir_sequences <- function(genome_file, gr_fin, output, threads) {
   # Ensure the mmseqs2 output directory exists.
   mmseqs2_dir <- file.path(output, "mmseqs2")
   dir.create(mmseqs2_dir, showWarnings = FALSE, recursive = TRUE)
-  tmp_dir <- tempdir()
+  # A unique tmp per call, not the session-wide tempdir(): mmseqs reuses state it
+  # finds there, so a second call in the same session clusters differently from a
+  # first one (measured: 38/1595 elements changed Multiplicity). Harmless while
+  # this ran once per pipeline, but it is called again after round4().
+  tmp_dir <- tempfile("mmseqs2_tir_tmp_")
+  dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
   tir_cls <- list()
   cls_size_list <- list()
   # Loop over each classification file and run mmseqs2 clustering.

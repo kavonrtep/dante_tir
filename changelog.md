@@ -1,3 +1,77 @@
+## Unreleased
+
+Every element now carries copy-number information, and the GFF3 states how it
+joins to the FASTA instead of leaving consumers to guess. **`Multiplicity` and
+`Cluster_ID` values change for existing elements too** — see the entry below
+before upgrading anything that filters on them.
+
+### Round-4 elements now carry `Multiplicity` and `Cluster_ID`
+
+- `cluster_tir_sequences()` ran once, *before* `round4()`, because round 4 needs
+  its output. Elements that round 4 then appended never received a
+  `Multiplicity` attribute at all. On maize that is **266 of 1,595 elements
+  (17 %)**, and on run-000156 **1,833 of 7,233 (25 %)** — every round-4 element,
+  in both cases.
+
+- A consumer applying a copy-number floor to build a library reads a missing
+  attribute as "no copies" and drops all of them, for a reason unrelated to
+  their copy number. This is not hypothetical: CARP's
+  `filter_dante_tir_by_multiplicity.py` defaults the attribute to 1 and so
+  discards the whole of round 4 at any threshold >= 2.
+
+- `detect_tirs.R` now re-runs `cluster_tir_sequences()` on the final set after
+  `round4()`, guarded by `if (length(gr4) > 0)` so it costs nothing when round 4
+  adds nothing. Measured on maize: elements with no `Multiplicity` **266 -> 0**.
+
+- **Deliberate change to results.** Multiplicity is now computed over the final
+  element set rather than the pre-round-4 set, so values shift for elements that
+  already had one. On maize the count passing a `>= 3` floor goes **806 -> 978**
+  (+21 %). That is the correct number — the earlier one was clustering an
+  incomplete set — but anyone filtering on `Multiplicity` will see a larger
+  library.
+
+### `Name=` — an explicit GFF3 <-> FASTA join key
+
+- The two outputs spelled the same element differently: `detect_tirs.R` builds
+  the FASTA name by stripping `Class_II_Subclass_1_TIR_` off the GFF3 `ID`, so
+  `ID=Class_II_Subclass_1_TIR_EnSpm_CACTA_1611` is `>EnSpm_CACTA_1611#...` in the
+  FASTA. Joining the two required knowing that rule, and getting it wrong failed
+  silently — CARP's multiplicity filter matched **0 of 7,233** records this way.
+
+- Each `sequence_feature` row now carries `Name=` holding exactly the FASTA name.
+  Verified 0 mismatches against the FASTA on the short, long and both maize runs.
+  Additive: `dante_tir_summary.R` checks for required columns only, so an extra
+  attribute is inert.
+
+### Reproducibility
+
+- `cluster_tir_sequences()` passed the session-wide `tempdir()` to
+  `mmseqs easy-cluster`, while the sibling `cluster_mmseqs2()` correctly uses a
+  per-call `tempfile()`. mmseqs reuses state it finds in that directory, so a
+  *second* call in one R session clusters differently from the first — measured
+  at **38 of 1,595 elements** with a changed `Multiplicity`. Latent for as long
+  as clustering ran once per run; the round-4 fix above makes it run twice, which
+  would have shipped nondeterminism. Now a unique `tempfile()` per call with
+  `on.exit(unlink())`.
+
+- After the fix, repeated calls within one session are identical, 4- and 8-thread
+  runs are identical, and a single call is bit-identical to 0.3.0's output — the
+  change does not alter single-call behaviour.
+
+- Gated on maize against the existing repeat-run control rather than against
+  byte-equality, since runs at that scale are never identical:
+
+  | comparison | lost | gained | shared |
+  |---|---|---|---|
+  | *null* — 0.3.0 run vs its repeat | 3 | 6 | 99.44 % |
+  | patched vs patched (determinism) | 3 | 1 | 99.75 % |
+  | 0.3.0 vs patched, run 1 (regression) | 1 | 6 | 99.56 % |
+  | 0.3.0 vs patched, run 2 (regression) | 4 | 7 | 99.31 % |
+
+  Treatment churn sits at the null: determinism is unchanged and detection is
+  unaffected. Run-to-run variation at this scale is pre-existing and is tracked
+  separately.
+
 ## 0.3.0 — 2026-07-27
 
 The release that makes DANTE_TIR finish on very large, high-copy genomes. On an
