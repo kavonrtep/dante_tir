@@ -1,9 +1,58 @@
 ## Unreleased
 
-Every element now carries copy-number information, and the GFF3 states how it
-joins to the FASTA instead of leaving consumers to guess. **`Multiplicity` and
-`Cluster_ID` values change for existing elements too** — see the entry below
-before upgrading anything that filters on them.
+**Runs are now reproducible**: the same inputs give a byte-identical
+`DANTE_TIR_final.gff3`, which was not true before. Every element also carries
+copy-number information, and the GFF3 states how it joins to the FASTA instead
+of leaving consumers to guess. Two deliberate changes to results, both measured
+below: the element set shifts because fragment order changed, and `Multiplicity`
+values change because they are now computed over the final element set.
+
+### Runs are reproducible
+
+- Two runs on the same input used to differ — 3 elements lost and 6 gained on
+  maize, the pipeline's long-standing "noise floor". The cause was localised by
+  diffing two `--debug` runs stage by stage: the amino-acid FASTAs, the flank
+  coordinates and the 6 kb region FASTAs were bit-identical, and the first thing
+  that differed was the fragment FASTA handed to CAP3 — with an *identical record
+  set* and a different order.
+
+- **mmseqs2 clusters deterministically but does not emit the result in a stable
+  order.** Two runs over a bit-identical AA FASTA gave the same partition, the
+  same representative set and the same cluster count (117/237/153/291 on maize),
+  but a different line order in `clusters_cluster.tsv` every time — the
+  `--threads N` completion order.
+
+- `group_sequences_by_clusters()` then sorted clusters by size with a *stable*
+  sort, so equal-sized clusters silently kept mmseqs' order; with many singleton
+  clusters, ties are the common case. That became the group member order, which
+  became the fragment order, and CAP3's assembly is order-sensitive. All of the
+  churn came from this one place.
+
+- The grouping now imposes a total order — members sorted within each cluster,
+  clusters sorted by `(-size, representative id)` with numeric-aware keys — so
+  mmseqs' output order is absorbed rather than inherited. `cluster_tsv` still
+  differs between runs; nothing downstream sees it. Verified on maize: two runs
+  produce a byte-identical GFF3, FASTA and summary, and every result object in
+  the saved workspace is `identical()`. `tests/test_cluster_grouping_order.py`
+  feeds shuffled line orders, reversed cluster blocks and reversed members at two
+  `--max_class_size` values; it fails 6 assertions against the old code.
+
+- **Deliberate change to results, with its cost measured.** A fixed fragment
+  order is one arbitrary order among many, and CAP3 assembles differently from
+  the one that used to arrive by chance. Against the 1,927 curated autonomous
+  maize loci:
+
+  | | elements | loci recovered |
+  |---|---|---|
+  | 0.3.0 | 1,595 | 831 (43.1 %) |
+  | 0.3.0, rerun | 1,598 | 831 (43.1 %) |
+  | this release | 1,608 | **827 (42.9 %)** |
+
+  10 loci lost, 6 gained, all EnSpm/CACTA — a net **-4 loci (-0.2 points)** for
+  reproducibility. Locus recovery was previously stable at 831 across reruns even
+  though the element set was not, so this is a real change rather than noise. No
+  attempt has been made to pick a fragment order that scores better on maize;
+  that would be fitting a parameter to one genome.
 
 ### Round-4 elements now carry `Multiplicity` and `Cluster_ID`
 

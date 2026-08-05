@@ -1512,6 +1512,18 @@ def cluster_aa_sequences_mmseqs2(aa_fasta_files: Dict[str, str],
     return mmseqs_output_dirs
 
 
+def mmseqs_id_sort_key(seq_id: str):
+    """
+    Total order for mmseqs sequence IDs, numeric where possible.
+
+    IDs are the integer domain IDs assigned by get_tir_records_from_dante(), but
+    they arrive as strings, so a plain sort would order 10 before 9. The tuple
+    keeps digit and non-digit IDs comparable with each other.
+    """
+    text = str(seq_id)
+    return (0, int(text), '') if text.isdigit() else (1, 0, text)
+
+
 def parse_mmseqs2_clusters(cluster_tsv_file: str) -> Dict[str, list]:
     """
     Parse mmseqs2 cluster output file (adjacency list format).
@@ -1577,9 +1589,22 @@ def group_sequences_by_clusters(mmseqs_output_dirs: Dict[str, str],
             sequence_groups[cls] = {}
             continue
 
-        # Convert to list of (cluster_id, [members]) sorted by cluster size (descending)
-        cluster_list = [(cluster_id, members) for cluster_id, members in clusters.items()]
-        cluster_list.sort(key=lambda x: len(x[1]), reverse=True)
+        # mmseqs writes clusters_cluster.tsv in thread-completion order, so both
+        # the cluster order and the member order in `clusters` are
+        # nondeterministic even though the clustering itself is not (measured on
+        # maize: identical partition, identical representatives, different line
+        # order on every rerun). That order reaches CAP3 as the fragment order,
+        # and CAP3 is order-sensitive -- which is the whole of the pipeline's
+        # run-to-run churn. Impose a total order here, before anything downstream
+        # can inherit it.
+        for members in clusters.values():
+            members.sort(key=mmseqs_id_sort_key)
+
+        # Sorted by cluster size (descending), ties broken by representative ID.
+        # A plain size sort is stable, so ties silently kept mmseqs' order --
+        # and with many singleton clusters, ties are the common case.
+        cluster_list = sorted(clusters.items(),
+                              key=lambda x: (-len(x[1]), mmseqs_id_sort_key(x[0])))
 
         groups = {}
         current_group = 1
