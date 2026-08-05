@@ -22,4 +22,8 @@ echo
 echo "=== unit: fragmentation depends on the sequence, not on its neighbours ==="
 python3 "$ROOT/tests/test_fragmentation.py"
 
+echo
+echo "=== unit: grouping does not inherit mmseqs2's output order ==="
+python3 "$ROOT/tests/test_cluster_grouping_order.py"
+
 echo "unit tests OK"

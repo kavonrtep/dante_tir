@@ -1,3 +1,126 @@
+## Unreleased
+
+**Runs are now reproducible**: the same inputs give a byte-identical
+`DANTE_TIR_final.gff3`, which was not true before. Every element also carries
+copy-number information, and the GFF3 states how it joins to the FASTA instead
+of leaving consumers to guess. Two deliberate changes to results, both measured
+below: the element set shifts because fragment order changed, and `Multiplicity`
+values change because they are now computed over the final element set.
+
+### Runs are reproducible
+
+- Two runs on the same input used to differ — 3 elements lost and 6 gained on
+  maize, the pipeline's long-standing "noise floor". The cause was localised by
+  diffing two `--debug` runs stage by stage: the amino-acid FASTAs, the flank
+  coordinates and the 6 kb region FASTAs were bit-identical, and the first thing
+  that differed was the fragment FASTA handed to CAP3 — with an *identical record
+  set* and a different order.
+
+- **mmseqs2 clusters deterministically but does not emit the result in a stable
+  order.** Two runs over a bit-identical AA FASTA gave the same partition, the
+  same representative set and the same cluster count (117/237/153/291 on maize),
+  but a different line order in `clusters_cluster.tsv` every time — the
+  `--threads N` completion order.
+
+- `group_sequences_by_clusters()` then sorted clusters by size with a *stable*
+  sort, so equal-sized clusters silently kept mmseqs' order; with many singleton
+  clusters, ties are the common case. That became the group member order, which
+  became the fragment order, and CAP3's assembly is order-sensitive. All of the
+  churn came from this one place.
+
+- The grouping now imposes a total order — members sorted within each cluster,
+  clusters sorted by `(-size, representative id)` with numeric-aware keys — so
+  mmseqs' output order is absorbed rather than inherited. `cluster_tsv` still
+  differs between runs; nothing downstream sees it. Verified on maize: two runs
+  produce a byte-identical GFF3, FASTA and summary, and every result object in
+  the saved workspace is `identical()`. `tests/test_cluster_grouping_order.py`
+  feeds shuffled line orders, reversed cluster blocks and reversed members at two
+  `--max_class_size` values; it fails 6 assertions against the old code.
+
+- **Deliberate change to results, with its cost measured.** A fixed fragment
+  order is one arbitrary order among many, and CAP3 assembles differently from
+  the one that used to arrive by chance. Against the 1,927 curated autonomous
+  maize loci:
+
+  | | elements | loci recovered |
+  |---|---|---|
+  | 0.3.0 | 1,595 | 831 (43.1 %) |
+  | 0.3.0, rerun | 1,598 | 831 (43.1 %) |
+  | this release | 1,608 | **827 (42.9 %)** |
+
+  10 loci lost, 6 gained, all EnSpm/CACTA — a net **-4 loci (-0.2 points)** for
+  reproducibility. Locus recovery was previously stable at 831 across reruns even
+  though the element set was not, so this is a real change rather than noise. No
+  attempt has been made to pick a fragment order that scores better on maize;
+  that would be fitting a parameter to one genome.
+
+### Round-4 elements now carry `Multiplicity` and `Cluster_ID`
+
+- `cluster_tir_sequences()` ran once, *before* `round4()`, because round 4 needs
+  its output. Elements that round 4 then appended never received a
+  `Multiplicity` attribute at all. On maize that is **266 of 1,595 elements
+  (17 %)**, and on run-000156 **1,833 of 7,233 (25 %)** — every round-4 element,
+  in both cases.
+
+- A consumer applying a copy-number floor to build a library reads a missing
+  attribute as "no copies" and drops all of them, for a reason unrelated to
+  their copy number. This is not hypothetical: CARP's
+  `filter_dante_tir_by_multiplicity.py` defaults the attribute to 1 and so
+  discards the whole of round 4 at any threshold >= 2.
+
+- `detect_tirs.R` now re-runs `cluster_tir_sequences()` on the final set after
+  `round4()`, guarded by `if (length(gr4) > 0)` so it costs nothing when round 4
+  adds nothing. Measured on maize: elements with no `Multiplicity` **266 -> 0**.
+
+- **Deliberate change to results.** Multiplicity is now computed over the final
+  element set rather than the pre-round-4 set, so values shift for elements that
+  already had one. On maize the count passing a `>= 3` floor goes **806 -> 978**
+  (+21 %). That is the correct number — the earlier one was clustering an
+  incomplete set — but anyone filtering on `Multiplicity` will see a larger
+  library.
+
+### `Name=` — an explicit GFF3 <-> FASTA join key
+
+- The two outputs spelled the same element differently: `detect_tirs.R` builds
+  the FASTA name by stripping `Class_II_Subclass_1_TIR_` off the GFF3 `ID`, so
+  `ID=Class_II_Subclass_1_TIR_EnSpm_CACTA_1611` is `>EnSpm_CACTA_1611#...` in the
+  FASTA. Joining the two required knowing that rule, and getting it wrong failed
+  silently — CARP's multiplicity filter matched **0 of 7,233** records this way.
+
+- Each `sequence_feature` row now carries `Name=` holding exactly the FASTA name.
+  Verified 0 mismatches against the FASTA on the short, long and both maize runs.
+  Additive: `dante_tir_summary.R` checks for required columns only, so an extra
+  attribute is inert.
+
+### Reproducibility
+
+- `cluster_tir_sequences()` passed the session-wide `tempdir()` to
+  `mmseqs easy-cluster`, while the sibling `cluster_mmseqs2()` correctly uses a
+  per-call `tempfile()`. mmseqs reuses state it finds in that directory, so a
+  *second* call in one R session clusters differently from the first — measured
+  at **38 of 1,595 elements** with a changed `Multiplicity`. Latent for as long
+  as clustering ran once per run; the round-4 fix above makes it run twice, which
+  would have shipped nondeterminism. Now a unique `tempfile()` per call with
+  `on.exit(unlink())`.
+
+- After the fix, repeated calls within one session are identical, 4- and 8-thread
+  runs are identical, and a single call is bit-identical to 0.3.0's output — the
+  change does not alter single-call behaviour.
+
+- Gated on maize against the existing repeat-run control rather than against
+  byte-equality, since runs at that scale are never identical:
+
+  | comparison | lost | gained | shared |
+  |---|---|---|---|
+  | *null* — 0.3.0 run vs its repeat | 3 | 6 | 99.44 % |
+  | patched vs patched (determinism) | 3 | 1 | 99.75 % |
+  | 0.3.0 vs patched, run 1 (regression) | 1 | 6 | 99.56 % |
+  | 0.3.0 vs patched, run 2 (regression) | 4 | 7 | 99.31 % |
+
+  Treatment churn sits at the null: determinism is unchanged and detection is
+  unaffected. Run-to-run variation at this scale is pre-existing and is tracked
+  separately.
+
 ## 0.3.0 — 2026-07-27
 
 The release that makes DANTE_TIR finish on very large, high-copy genomes. On an

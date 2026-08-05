@@ -134,6 +134,19 @@ tryCatch({
   gr_fin <- round4_results$gr_fin
   res4_df <- round4_results$res4_df
 
+  # round4() appends elements that did not exist when cluster_tir_sequences() ran
+  # above, so they carry no Multiplicity/Cluster_ID. Re-cluster the final set, so
+  # that every emitted element has copy-number information: consumers apply a
+  # multiplicity floor when building a library, and would otherwise drop the
+  # round-4 elements for a reason unrelated to their copy number.
+  if (length(gr4) > 0) {
+    message("Re-clustering TIR sequences to cover round-4 elements")
+    clustering_results <- cluster_tir_sequences(opt$genome, gr_fin, opt$output,
+                                                opt$threads)
+    gr_fin <- clustering_results$gr_fin
+    tir_cls_df <- clustering_results$tir_cls_df
+    message("-------------------------------------------------------------------")
+  }
 
   class_table <- as.data.frame.array(table(gr_fin$Classification))
   colnames(class_table) <- "Number of Elements"
@@ -144,6 +157,11 @@ tryCatch({
   write.table(class_table[, 2:1], file = paste0(opt$output,
                                                 "/TIR_classification_summary.txt"),
               sep = "\t", quote = FALSE, row.names = FALSE)
+  # Explicit join key between DANTE_TIR_final.gff3 and DANTE_TIR_final.fasta.
+  # The FASTA name is the ID with the classification prefix stripped (see the
+  # names(tir_seqs) assignment below), so publish it here rather than leaving
+  # every consumer to re-derive that rule -- and get it wrong silently.
+  gr_fin$Name <- gsub("Class_II_Subclass_1_TIR_", "", gr_fin$ID)
   export(gr_fin, paste0(opt$output, "/DANTE_TIR_final.gff3"), format = "gff3")
   save.image(paste0(opt$output, "/DANTE_TIR.RData"))
 

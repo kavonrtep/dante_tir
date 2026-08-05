@@ -4,8 +4,13 @@
 --max_class_size splits classes along mmseqs2 clusters, and mmseqs2 clustering
 is *order-sensitive*: measured on run-000129's MuDR domains (11,260 sequences,
 pipeline parameters), reordering the input alone moved 258 of 5,983 clusters
-and changed the cluster count to 6,016. It is otherwise stable -- rerunning is
-identical, and 1 thread matches 4.
+and changed the cluster count to 6,016. The clustering *result* is otherwise
+stable -- rerunning gives the same partition, and 1 thread matches 4.
+
+Note what that stability does not cover: mmseqs does not write that result in a
+stable *order*. Two maize runs over a bit-identical FASTA produced an identical
+partition but a different line order in clusters_cluster.tsv. Nothing downstream
+may inherit that order -- see test_cluster_grouping_order.py.
 
 So the determinism of a split run rests on this FASTA coming out the same way
 every time. Order here is the GFF3's, carried through dicts and lists; the risk
