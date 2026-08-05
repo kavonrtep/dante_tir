@@ -1,4 +1,4 @@
-## Unreleased
+## 0.3.1 — 2026-08-05
 
 **Runs are now reproducible**: the same inputs give a byte-identical
 `DANTE_TIR_final.gff3`, which was not true before. Every element also carries
@@ -118,8 +118,33 @@ values change because they are now computed over the final element set.
   | 0.3.0 vs patched, run 2 (regression) | 4 | 7 | 99.31 % |
 
   Treatment churn sits at the null: determinism is unchanged and detection is
-  unaffected. Run-to-run variation at this scale is pre-existing and is tracked
-  separately.
+  unaffected. That run-to-run variation is itself removed by the fragment-order
+  fix above, which was found afterwards — this table is the evidence that the
+  round-4 change did not add to it.
+
+### Failures are visible
+
+- When the R stage fails, `dante_tir.py` now prints the last 25 lines of R's
+  stderr and stdout rather than only naming the log directory. A CI failure
+  previously reported nothing but an exit status, and the log lived on a runner
+  that was gone by the time anyone looked; two release cycles were spent
+  guessing before this existed.
+
+### Packaging and CI
+
+- `bioconductor-genomeinfodbdata` is declared explicitly. It is a transitive
+  requirement of `GenomeInfoDb`, and a fresh solve pulls it in — but the release
+  workflow installed into an env that already held `conda-build`, and that
+  constrained solve left it out, so the R stage died at startup with *there is
+  no package called 'GenomeInfoDbData'*. Both workflows now also load the R
+  stack immediately after install, so a broken environment fails at the point
+  it breaks.
+
+- The release gate builds its own environment rather than reusing the build env,
+  for the same reason.
+
+- The GitHub release is created automatically from the changelog section
+  matching the tag; it used to be manual.
 
 ## 0.3.0 — 2026-07-27
 
