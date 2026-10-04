@@ -1,4 +1,9 @@
-## Unreleased
+## 0.3.2 — 2026-10-04
+
+**DANTE_TIR is now also published as a Singularity image**, built and tested
+with each release, for use from Galaxy and on HPC. The runtime dependencies are
+pinned, so the conda package, the image and the CI gate all resolve the same
+R / Bioconductor stack. No change to results.
 
 ### Singularity image on GHCR
 
