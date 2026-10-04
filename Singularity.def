@@ -1,0 +1,113 @@
+Bootstrap: docker
+# miniforge3 ships mamba (libmamba solver). The classic conda solver is far
+# slower on the Bioconductor dependency tree.
+From: condaforge/miniforge3:latest
+
+%labels
+    Author Petr Novak
+    Description DANTE_TIR - DNA transposons with Terminal Inverted Repeats from DANTE annotations
+    Source https://github.com/kavonrtep/dante_tir
+
+%help
+    DANTE_TIR identifies DNA transposons with Terminal Inverted Repeats (TIRs),
+    starting from DANTE annotations of conserved transposase domains.
+
+    Commands:
+        dante_tir.py          TIR element detection (default runscript)
+        dante_tir_summary.R   Clustering and HTML summary of detected elements
+
+    Examples:
+        singularity exec dante_tir.sif dante_tir.py \
+            -g dante.gff3 -f genome.fasta -o out -c 8
+        singularity exec dante_tir.sif dante_tir_summary.R \
+            -g out/DANTE_TIR_final.gff3 -f genome.fasta -o summary -t 8
+        singularity run dante_tir.sif --help
+
+%files
+    # Bake the tagged source into the image, so the SIF reflects the exact
+    # commit it was built from, not whatever is on the conda channel. Only the
+    # runtime files: test data, benchmarks and dev tooling stay out.
+    dante_tir.py         /opt/dante_tir/dante_tir.py
+    dante_tir_summary.R  /opt/dante_tir/dante_tir_summary.R
+    detect_tirs.R        /opt/dante_tir/detect_tirs.R
+    dt_utils.py          /opt/dante_tir/dt_utils.py
+    dt_utils.R           /opt/dante_tir/dt_utils.R
+    blast_cp.py          /opt/dante_tir/blast_cp.py
+    version.py           /opt/dante_tir/version.py
+    requirements.txt     /opt/dante_tir/requirements.txt
+    LICENSE              /opt/dante_tir/LICENSE
+
+%post
+    set -e
+
+    # Write .condarc before the first conda call; with CONDARC pointing at a
+    # non-default path, mamba aborts if the file does not exist yet.
+    mkdir -p /opt/conda/config
+    cat > /opt/conda/config/.condarc <<'EOF'
+channels:
+  - conda-forge
+  - r
+  - bioconda
+  - petrnovak
+channel_priority: strict
+EOF
+    export CONDARC=/opt/conda/config/.condarc
+    export CONDA_PLUGINS_AUTO_ACCEPT_TOS=yes
+    export PATH=/opt/conda/bin:$PATH
+
+    # bioconductor-genomeinfodbdata's post-link script calls jq, which the
+    # dependency set does not guarantee to link first. Install it up front,
+    # in base, which is on PATH for the post-link scripts.
+    mamba install -y -n base -c conda-forge jq
+
+    # Runtime dependencies, pinned in requirements.txt (same file the CI
+    # gate and the conda recipe use), in their own env at /opt/env. Installing
+    # into base would downgrade the Python that conda itself runs on.
+    mamba create -y -p /opt/env \
+        -c conda-forge -c r -c bioconda -c petrnovak \
+        --file /opt/dante_tir/requirements.txt
+
+    # genomeinfodbdata's post-link fetches data at install time and can
+    # finish without it, leaving GenomeInfoDb unloadable. Reinstall once if so.
+    if ! /opt/env/bin/Rscript -e 'suppressMessages(library(GenomeInfoDb))' 2>/dev/null
+    then
+        echo "GenomeInfoDb failed to load; reinstalling bioconductor-genomeinfodbdata"
+        mamba install -y -p /opt/env --force-reinstall \
+            -c conda-forge -c r -c bioconda bioconductor-genomeinfodbdata
+    fi
+
+    # Mirror conda/dante_tir/build.sh: CLIs on PATH via symlinks. The scripts
+    # resolve their siblings through the real path, so symlinks are safe.
+    chmod +x /opt/dante_tir/dante_tir.py /opt/dante_tir/dante_tir_summary.R \
+             /opt/dante_tir/detect_tirs.R /opt/dante_tir/blast_cp.py
+    ln -sf /opt/dante_tir/dante_tir.py        /opt/env/bin/dante_tir.py
+    ln -sf /opt/dante_tir/dante_tir_summary.R /opt/env/bin/dante_tir_summary.R
+
+    conda clean -a -y
+
+    # Fail the build if the runtime stack does not load.
+    export PATH=/opt/env/bin:$PATH
+    Rscript -e 'suppressPackageStartupMessages({
+        library(Biostrings); library(BSgenome); library(Rsamtools)
+        library(rtracklayer); library(Rbeast); library(optparse)
+    }); cat("R dependencies load OK\n")'
+    dante_tir.py --version
+    dante_tir_summary.R --help > /dev/null
+
+%environment
+    export PATH=/opt/env/bin:$PATH
+    export CONDA_PREFIX=/opt/env
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+
+%runscript
+    exec dante_tir.py "$@"
+
+%apprun dante_tir
+    exec dante_tir.py "$@"
+
+%apprun dante_tir_summary
+    exec dante_tir_summary.R "$@"
+
+%test
+    dante_tir.py --version

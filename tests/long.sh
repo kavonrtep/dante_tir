@@ -8,6 +8,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# DANTE_TIR_BIN: directory holding the CLIs under test. Defaults to the
+# checkout; the release workflow points it at the copy baked into the SIF.
+BIN="${DANTE_TIR_BIN:-$ROOT}"
 LONG_FASTA="${LONG_FASTA:-$ROOT/tests/data/long/long.fasta}"
 LONG_DANTE="${LONG_DANTE:-$ROOT/tests/data/long/long.gff3}"
 OUT="$ROOT/tmp/tests/long"
@@ -23,7 +26,7 @@ cd "$ROOT"
 echo "=== dante_tir on long input ==="
 echo "    fasta: $LONG_FASTA"
 echo "    gff:   $LONG_DANTE"
-./dante_tir.py -g "$LONG_DANTE" -f "$LONG_FASTA" \
+"$BIN/dante_tir.py" -g "$LONG_DANTE" -f "$LONG_FASTA" \
                -o "$OUT/out" -c "$NCPU"
 
 GFF="$OUT/out/DANTE_TIR_final.gff3"
@@ -33,7 +36,7 @@ N=$(grep -c -v '^#' "$GFF" || true)
 
 echo
 echo "=== dante_tir_summary.R on long output ==="
-./dante_tir_summary.R -g "$GFF" -f "$LONG_FASTA" \
+"$BIN/dante_tir_summary.R" -g "$GFF" -f "$LONG_FASTA" \
                       -o "$OUT/summary" -t "$NCPU"
 
 [ -s "$OUT/summary/report.html" ] || \

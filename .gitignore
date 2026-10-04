@@ -12,6 +12,10 @@
 /__pycache__/
 *.pyc
 
+# Container images are published to GHCR, never committed.
+*.sif
+/images/
+
 # Local-only test data — slices live under tests/data/, not here.
 /test-data/
 

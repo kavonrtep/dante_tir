@@ -1,0 +1,352 @@
+name: release
+
+# One version tag publishes everything: the conda package to anaconda.org, the
+# Singularity image to GHCR, and the GitHub release. The release is created
+# last, so it only exists once both artefacts are published.
+#
+#   gate ──┬── conda ──────────────────────────────┐
+#          └── build-sif ── test-sif ── push-ghcr ─┴── github-release
+#
+# workflow_dispatch rebuilds the image for an existing tag (e.g. after a SIF
+# failure on the tag push, when the conda version is already on anaconda.org
+# and the guard would block a re-push). It skips the conda job, and creates
+# the GitHub release only if it does not exist yet.
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to rebuild the image for (e.g. 0.3.2)'
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  # Users pull with: apptainer pull oras://ghcr.io/kavonrtep/dante_tir/sif:<TAG>
+  GHCR_IMAGE: ghcr.io/kavonrtep/dante_tir/sif
+  APPTAINER_VERSION: 1.3.5
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  # Release gate: tag/version check, then the long test in a clean env.
+  # ───────────────────────────────────────────────────────────────────────
+  gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Assert tag matches version.py
+        run: |
+          V=$(python -c "exec(open('version.py').read()); print(__version__)")
+          if [ "$V" != "$TAG" ]; then
+            echo "::error::version.py ($V) does not match tag ($TAG)"
+            exit 1
+          fi
+          echo "tag matches version.py: $V"
+
+      - name: Guard against re-releasing an existing version
+        # anaconda.org rejects re-uploading an existing version, which would
+        # otherwise only surface after a full (slow) build. Fail fast here.
+        # The tag necessarily exists at this point, so the git-tag check is
+        # skipped (no --require-untagged); only the conda channel is checked.
+        # A manual image rebuild expects the version to be published already.
+        if: github.event_name == 'push'
+        run: ./dev_scripts/check_release_version.sh
+
+      - name: Set up miniforge / mamba
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-update-conda: false
+          use-mamba: true
+          activate-environment: dante_tir_gate
+          python-version: "3.11"
+          channels: conda-forge,r,bioconda,petrnovak
+          channel-priority: strict
+
+      # The gate env is created from requirements.txt alone. Installing the
+      # runtime stack into the build env (which holds conda-build,
+      # anaconda-client and setuptools<81) produced a solve that silently
+      # omitted GenomeInfoDbData, so every R library failed to load. A fresh
+      # env is also what a user gets.
+      - name: Install runtime dependencies
+        run: mamba install -y --file requirements.txt
+
+      - name: Verify the R stack loads
+        run: |
+          Rscript -e 'suppressPackageStartupMessages({
+            library(Biostrings); library(BSgenome); library(Rsamtools)
+            library(rtracklayer); library(Rbeast); library(optparse)
+          }); cat("R dependencies load OK\n")'
+          python3 -c "import numpy; print('numpy', numpy.__version__)"
+
+      - name: Long test (release gate)
+        run: ./tests.sh long
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Conda package: build and upload to anaconda.org/petrnovak.
+  # ───────────────────────────────────────────────────────────────────────
+  conda:
+    needs: gate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up miniforge / mamba
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-update-conda: false
+          use-mamba: true
+          activate-environment: release
+          python-version: "3.11"
+          channels: conda-forge,r,bioconda,petrnovak
+          channel-priority: strict
+
+      - name: Install build tooling
+        run: |
+          # anaconda-client's binstar_client still imports pkg_resources
+          # which setuptools 81.0.0 removed. Pin setuptools<81 (this is
+          # the upstream-recommended workaround). The runtime stack
+          # deliberately does NOT go in here -- see the gate job.
+          mamba install -y conda-build anaconda-client "setuptools<81"
+          conda-build --version
+
+      - name: Sync version.py into recipe dir
+        run: |
+          # meta.yaml reads version via load_file_regex('version.py');
+          # conda-build copies the recipe into a temp workdir before
+          # rendering, so the file must live inside the recipe dir.
+          cp version.py conda/dante_tir/version.py
+          cat conda/dante_tir/version.py
+
+      - name: Build conda package
+        run: |
+          mkdir -p build_out
+          # Use the standalone `conda-build` executable. The `conda build`
+          # subcommand is not registered with the base `conda` on PATH in
+          # this runner; `conda mambabuild` (boa) was removed upstream.
+          conda-build -c conda-forge -c r -c bioconda -c petrnovak \
+            --output-folder build_out \
+            conda/dante_tir
+
+      - name: Upload to anaconda.org
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          if [ -z "${ANACONDA_API_TOKEN:-}" ]; then
+            echo "::error::ANACONDA_API_TOKEN secret is not set"
+            exit 1
+          fi
+          FILES=$(ls build_out/noarch/dante_tir-*.tar.bz2 \
+                     build_out/noarch/dante_tir-*.conda 2>/dev/null || true)
+          if [ -z "$FILES" ]; then
+            echo "::error::no built package found in build_out/noarch/"
+            exit 1
+          fi
+          for f in $FILES; do
+            echo "Uploading $f"
+            anaconda -t "$ANACONDA_API_TOKEN" upload \
+              --user petrnovak --label main "$f"
+          done
+
+      - name: Keep the package for the GitHub release
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conda-package
+          path: build_out/noarch/dante_tir-*
+          if-no-files-found: ignore
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Singularity image from Singularity.def. The def copies the tagged source
+  # into the image and installs requirements.txt from conda-forge / bioconda;
+  # it does not depend on the anaconda.org upload.
+  # ───────────────────────────────────────────────────────────────────────
+  build-sif:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - uses: eWaterCycle/setup-apptainer@v2
+        with:
+          apptainer-version: ${{ env.APPTAINER_VERSION }}
+
+      - name: Build SIF
+        run: |
+          mkdir -p images
+          sudo apptainer build --force "images/dante_tir_${TAG}.sif" Singularity.def
+          sudo chown "$(id -u):$(id -g)" "images/dante_tir_${TAG}.sif"
+          ls -lh images/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sif
+          path: images/dante_tir_*.sif
+          retention-days: 1
+          compression-level: 0   # SIF is already compressed
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Run the long test with the CLIs baked into the image (DANTE_TIR_BIN), so
+  # the artefact that ships is what gets tested. Only test data comes from
+  # the checkout.
+  # ───────────────────────────────────────────────────────────────────────
+  test-sif:
+    needs: build-sif
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: eWaterCycle/setup-apptainer@v2
+        with:
+          apptainer-version: ${{ env.APPTAINER_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sif
+          path: images/
+
+      - name: Long test inside the container
+        run: |
+          SIF="images/dante_tir_${TAG}.sif"
+          apptainer exec "$SIF" dante_tir.py --version
+          apptainer exec --cleanenv -B "$PWD" \
+            --env DANTE_TIR_BIN=/opt/dante_tir,NCPU=2 \
+            "$SIF" bash tests/long.sh
+
+      - name: Upload output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sif-test-output
+          path: tmp/tests/long
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Push the tested SIF to GHCR as an ORAS artefact, as <TAG> and latest.
+  # GHCR creates new packages as private: after the first push, set the
+  # package visibility to public once in its GitHub settings.
+  # ───────────────────────────────────────────────────────────────────────
+  push-ghcr:
+    needs: test-sif
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      packages: write
+    steps:
+      - uses: eWaterCycle/setup-apptainer@v2
+        with:
+          apptainer-version: ${{ env.APPTAINER_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sif
+          path: images/
+
+      - name: Login to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | apptainer registry login \
+            --username "${GITHUB_ACTOR}" --password-stdin oras://ghcr.io
+
+      - name: Push SIF
+        run: |
+          SIF="images/dante_tir_${TAG}.sif"
+          apptainer push "$SIF" "oras://${GHCR_IMAGE}:${TAG}"
+          apptainer push "$SIF" "oras://${GHCR_IMAGE}:latest"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # GitHub release: changelog section for the tag plus install instructions.
+  # Runs when the image is pushed and the conda job either succeeded or was
+  # skipped (manual image rebuild).
+  # ───────────────────────────────────────────────────────────────────────
+  github-release:
+    needs: [conda, push-ghcr]
+    if: >-
+      always() && needs.push-ghcr.result == 'success' &&
+      (needs.conda.result == 'success' || needs.conda.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Fetch the conda package
+        if: needs.conda.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: conda-package
+          path: build_out/
+
+      - name: Compose release notes
+        run: |
+          # Release notes are this version's changelog section, so the GitHub
+          # release says the same thing as the repository.
+          python - <<'PY' > release_notes.md
+          import os, re
+          version = os.environ["TAG"]
+          image = os.environ["GHCR_IMAGE"]
+          text = open("changelog.md").read()
+          m = re.search(r"^## %s\b.*?(?=^## )" % re.escape(version),
+                        text, re.S | re.M)
+          print(m.group(0).strip() if m else
+                "See changelog.md for the changes in %s." % version)
+          print(f"""
+          ## Installation
+
+          Singularity / Apptainer image:
+
+          ```bash
+          singularity pull dante_tir_{version}.sif oras://{image}:{version}
+          singularity exec dante_tir_{version}.sif dante_tir.py -g dante.gff3 -f genome.fasta -o out -c 8
+          ```
+
+          Conda:
+
+          ```bash
+          mamba create -n dante_tir -c conda-forge -c r -c bioconda -c petrnovak dante_tir={version}
+          ```""")
+          PY
+          cat release_notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; leaving it unchanged"
+            exit 0
+          fi
+          shopt -s nullglob
+          gh release create "$TAG" --verify-tag \
+            --title "$TAG" \
+            --notes-file release_notes.md \
+            build_out/dante_tir-*.conda build_out/dante_tir-*.tar.bz2
