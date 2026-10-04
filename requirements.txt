@@ -1,12 +1,26 @@
-python >=3.6.0
-numpy
-mmseqs2 >=14
-blast
-cap3
-r-optparse
-r-rbeast
-bioconductor-biostrings
-bioconductor-genomeinfodbdata
-bioconductor-bsgenome
-bioconductor-rsamtools
-bioconductor-rtracklayer
+# Runtime environment for dante_tir (conda MatchSpec syntax).
+# Channels: conda-forge, r, bioconda, petrnovak (strict priority).
+#
+# The R / Bioconductor stack is pinned to the combination verified to work
+# (r43, Bioconductor 3.18). Unpinned, one dante_tir version resolved to
+# different stacks on different machines, and a BiocGenerics/S4Vectors
+# mismatch broke detect_tirs.R at load time on the production Galaxy.
+# Keep conda/dante_tir/meta.yaml run requirements in step with this file.
+python=3.11
+numpy=2.4
+mmseqs2=18.8cc5c
+blast=2.17.0
+cap3=10.2011
+r-base=4.3.3
+r-optparse=1.7.5
+r-rbeast=0.9.9
+bioconductor-biocgenerics=0.48.1
+bioconductor-s4vectors=0.40.2
+bioconductor-iranges=2.36.0
+bioconductor-biostrings=2.70.1
+bioconductor-genomeinfodb=1.38.1
+bioconductor-genomeinfodbdata=1.2.11
+bioconductor-genomicranges=1.54.1
+bioconductor-bsgenome=1.70.1
+bioconductor-rsamtools=2.18.0
+bioconductor-rtracklayer=1.62.0

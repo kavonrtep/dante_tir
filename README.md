@@ -36,10 +36,20 @@ Using conda:
 conda install -c conda-forge -c r -c bioconda -c petrnovak  dante_tir
 ```
 
-The `petrnovak` channel package is built from this repository's release
-tags by `.github/workflows/conda-release.yml` and uploaded to
-[anaconda.org/petrnovak/dante_tir](https://anaconda.org/petrnovak/dante_tir).
-The recipe lives at `conda/dante_tir/`.
+Using Singularity / Apptainer:
+```
+singularity pull dante_tir.sif oras://ghcr.io/kavonrtep/dante_tir/sif:latest
+singularity exec dante_tir.sif dante_tir.py -g annotation.gff3 -f genome.fasta -o output_directory -c 8
+singularity exec dante_tir.sif dante_tir_summary.R -g output_directory/DANTE_TIR_final.gff3 -f genome.fasta -o summary_output -t 8
+```
+Replace `latest` with a version number (e.g. `0.3.2`) to pin a release.
+
+Both are built from this repository's release tags by
+`.github/workflows/release.yml`: the conda package is uploaded to
+[anaconda.org/petrnovak/dante_tir](https://anaconda.org/petrnovak/dante_tir)
+(recipe in `conda/dante_tir/`), and the image, built from `Singularity.def`,
+is pushed to GHCR after the long test passes inside it. Runtime dependencies
+are pinned in `requirements.txt`.
 
 ## Usage
 

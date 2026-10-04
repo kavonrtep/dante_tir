@@ -21,7 +21,7 @@ PATH — prepend the conda env when you need them:
    - If it fails, STOP and report — do not proceed. Pick a higher version.
 
 3. **Run the release gate locally — `./tests.sh long`.** This is the step that
-   `conda-release.yml` runs before it builds anything, and `smoke`/`short` do
+   `release.yml` runs before it builds anything, and `smoke`/`short` do
    NOT cover it: `long` is the only test that exercises Round 4, the mmseqs
    clustering of TIR sequences and the final genome extraction. 0.3.0 burned
    three tag cycles because this was skipped. It takes ~90 s:
@@ -43,7 +43,8 @@ PATH — prepend the conda env when you need them:
 7. **Tag** `git tag <X.Y.Z>`.
 
 8. **STOP. Do NOT push.** The user pushes themselves — the tag-driven
-   `conda-release.yml` CI publishes on tag push, and they control timing. Report
+   `release.yml` CI publishes on tag push (conda package, SIF on GHCR, GitHub
+   release), and they control timing. Report
    the state and give the exact push command, e.g.
    `git push origin main && git push origin <X.Y.Z>`.
    (Only mention `--force`/`--force-with-lease` if the branch/tag was rewritten.)
@@ -52,8 +53,8 @@ Related: see the `release-workflow` and `env-tools` memories.
 
 ## If the release gate fails after the tag is pushed
 
-A failed gate publishes **nothing** — `conda-release.yml` runs the gate before
-`conda-build`, so there is no artifact and no anaconda upload. Confirm with
+A failed gate publishes **nothing** — `release.yml` runs the gate before
+`conda-build` and the SIF build, so there is no artifact and no anaconda upload. Confirm with
 `RELEASE_VERSION=<X.Y.Z> ./dev_scripts/check_release_version.sh`; if it still
 reports the version as free, the tag may be moved rather than burning a version:
 
@@ -81,6 +82,14 @@ workflow only asserts that `version.py` matches the tag name, which still holds.
   both workflows load the R stack right after install. If a failure ever again
   reports only an exit status, fix the visibility first — two cycles were spent
   guessing before that was added.
-- **The GitHub release is automatic** (`Create the GitHub release` step, notes
-  taken from the changelog section for the tag). It needs `permissions:
-  contents: write` on the job. Before 0.3.1 this was manual.
+- **The GitHub release is automatic** (`github-release` job, notes taken from
+  the changelog section for the tag). It runs only after both the conda upload
+  and the GHCR push succeed. Before 0.3.1 this was manual.
+- **SIF failed but conda succeeded?** Run the workflow manually:
+  `gh workflow run release.yml -f tag=<X.Y.Z>`. It rebuilds, tests and pushes
+  the image, skips conda, and creates the GitHub release if it is missing.
+  It builds from the tag, so a transient failure needs nothing else; a fix to
+  `Singularity.def` needs the tag moved to the fix commit first. The push run
+  the moved tag triggers fails at the conda guard, which is expected.
+- **Runtime pins** live in `requirements.txt` and are mirrored in
+  `conda/dante_tir/meta.yaml`. Change both together.

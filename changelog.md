@@ -1,3 +1,30 @@
+## Unreleased
+
+### Singularity image on GHCR
+
+- Each release now also publishes a Singularity / Apptainer image:
+  `singularity pull oras://ghcr.io/kavonrtep/dante_tir/sif:<version>` (also
+  tagged `latest`). It is built from `Singularity.def`, which copies the tagged
+  source into the image and installs `requirements.txt` into `/opt/env`; it does
+  not depend on the anaconda.org upload. Intended for Galaxy, in the same way as
+  the TideCluster and CARP images.
+- `conda-release.yml` is replaced by `release.yml`: gate, then conda package
+  and SIF in parallel; the SIF runs the long test with the CLIs baked into the
+  image before it is pushed. The GitHub release is created only after both
+  artefacts are published. `workflow_dispatch` rebuilds the image for an
+  existing tag without touching conda.
+- `tests/short.sh` and `tests/long.sh` accept `DANTE_TIR_BIN`, the directory of
+  the CLIs under test (default: the checkout).
+
+### Runtime dependencies are pinned
+
+- `requirements.txt` and the conda recipe now pin the R / Bioconductor stack
+  that is verified to work (r-base 4.3.3, Bioconductor 3.18: BiocGenerics
+  0.48.1, S4Vectors 0.40.2, IRanges 2.36.0, Biostrings 2.70.1, ...), plus
+  Python 3.11, mmseqs2, BLAST and CAP3. Unpinned, one dante_tir version
+  resolved to different stacks on different machines; on the production Galaxy
+  a BiocGenerics/S4Vectors mismatch stopped `detect_tirs.R` at load time.
+
 ## 0.3.1 — 2026-08-05
 
 **Runs are now reproducible**: the same inputs give a byte-identical
