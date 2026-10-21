@@ -26,3 +26,6 @@
 /hermit/
 /benchmark/
 /testing.md
+
+# LibreOffice lock files.
+.~lock.*#

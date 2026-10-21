@@ -6,8 +6,7 @@
 
 **DANTE_TIR** identifies DNA transposons with Terminal Inverted Repeats (TIRs) based on pre-existing annotations of conserved transposase domains provided by the **DANTE** tool. It extends the annotation workflow by extracting and assembling sequences flanking these conserved domains to discover potential TIR motifs through comparative analysis.
 
-
-
+![DANTE_TIR workflow](figures/dante_tir_workflow.png)
 
 ### Process Overview:
 
@@ -16,7 +15,7 @@
 2. **Sequence Extraction:**
    - Extracts genomic sequences upstream and downstream from the identified transposase domains.
 3. **Contig Assembly:**
-   - Upstream and donwstream flankig sequences from each superfamily are assembled into contigs.
+   - Upstream and downstream flanking sequences from each superfamily are assembled into contigs.
 4. **TIR Detection:**
    - Analyzes assembled contigs to identify conserved sequences potentially representing TIR motifs.
    - Compares the 5' and 3' ends of contigs to confirm inverted repeat structures.
