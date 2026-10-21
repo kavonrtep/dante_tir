@@ -1,0 +1,7 @@
+# Environment for figures/make_workflow_pptx.py (not needed to run dante_tir).
+name: dante_tir_figures
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - python-pptx=1.0.2
